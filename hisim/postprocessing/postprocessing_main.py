@@ -1082,6 +1082,7 @@ class PostProcessor:
             ]
         ):
             # Get KPIs from ppdt
+            print("KPIs and costs are collected!")
             kpi_collection_dict = ppdt.kpi_collection_dict
 
             # Calculate capex

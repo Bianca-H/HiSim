@@ -87,6 +87,20 @@ class SimulationParameters(JSONWizard):
         self.post_processing_options.append(PostProcessingOptions.PLOT_MONTHLY_BAR_CHARTS)
         self.post_processing_options.append(PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER)
 
+    def enable_csv_only(self) -> None:
+        """only csv as output"""
+        self.post_processing_options.append(PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER)
+        self.post_processing_options.append(PostProcessingOptions.EXPORT_TO_CSV)
+        self.post_processing_options.append(PostProcessingOptions.GENERATE_CSV_FOR_HOUSING_DATA_BASE)
+        self.post_processing_options.append(PostProcessingOptions.COMPUTE_OPEX)
+        self.post_processing_options.append(PostProcessingOptions.COMPUTE_CAPEX)
+        self.post_processing_options.append(PostProcessingOptions.COMPUTE_KPIS)
+        self.post_processing_options.append(PostProcessingOptions.PREPARE_OUTPUTS_FOR_SCENARIO_EVALUATION)
+        self.post_processing_options.append(PostProcessingOptions.WRITE_KPIS_TO_JSON_FOR_BUILDING_SIZER)
+        self.post_processing_options.append(PostProcessingOptions.WRITE_KPIS_TO_JSON)
+        self.post_processing_options.append(PostProcessingOptions.EXPORT_MONTHLY_RESULTS)
+        self.post_processing_options.append(PostProcessingOptions.EXPORT_RESULTS_IN_ONE_FILE)
+
     @classmethod
     def full_year_all_options(cls, year: int, seconds_per_timestep: int) -> SimulationParameters:
         """Generates a parameter set for a full year with all the post processing, primarily for unit testing."""
@@ -107,6 +121,17 @@ class SimulationParameters(JSONWizard):
             seconds_per_timestep,
         )
         pars.enable_plots_only()
+        return pars
+    
+    @classmethod
+    def full_year_with_only_csv(cls, year: int, seconds_per_timestep: int) -> SimulationParameters:
+        """Generates a parameter set for a full year with all the post processing, primarily for unit testing."""
+        pars = cls(
+            datetime.datetime(year, 1, 1),
+            datetime.datetime(year + 1, 1, 1),
+            seconds_per_timestep,
+        )
+        pars.enable_csv_only()
         return pars
 
     @classmethod

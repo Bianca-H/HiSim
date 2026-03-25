@@ -57,14 +57,24 @@ def setup_function(
 
     # Build Simulation Parameters
     if my_simulation_parameters is None:
-        my_simulation_parameters = SimulationParameters.full_year_with_only_plots(
+        
+        my_simulation_parameters = SimulationParameters.full_year_with_only_csv(
             year=year, seconds_per_timestep=seconds_per_timestep
         )
+        #my_simulation_parameters = SimulationParameters.full_year_all_options(
+            #year=year, seconds_per_timestep=seconds_per_timestep
+        #)
+        
+        #my_simulation_parameters = SimulationParameters.full_year_with_only_plots(
+            #year=year, seconds_per_timestep=seconds_per_timestep
+        #)
 
     my_sim.set_simulation_parameters(my_simulation_parameters)
+    print(my_simulation_parameters.post_processing_options)
 
     # Build Building
-    my_building_config = building.BuildingConfig.get_default_german_single_family_home()
+    my_building_config = building.BuildingConfig.get_01_CH_single_family_home()
+    #my_building_config = building.BuildingConfig.get_default_german_single_family_home()
 
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
     # Build Occupancy

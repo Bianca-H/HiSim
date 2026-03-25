@@ -139,7 +139,7 @@ class BuildingConfig(cp.ConfigBase):
         config = BuildingConfig(
             building_name=building_name,
             name="Building",
-            building_code="DE.N.SFH.05.Gen.ReEx.001.002",
+            building_code="AT.N.SFH.01.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
             building_heat_capacity_class="medium",
             initial_internal_temperature_in_celsius=22.0,
             heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
@@ -157,6 +157,491 @@ class BuildingConfig(cp.ConfigBase):
             door_area_in_m2=door_area_in_m2,
             total_base_area_in_m2=None,
             number_of_apartments=None,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_01_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.9,
+        floor_area_in_m2: Optional[float] = 95.9,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.81,
+        facade_area_in_m2: Optional[float] = 173.6,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.46,
+        roof_area_in_m2: Optional[float] = 108.7,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 2,
+        window_area_in_m2: Optional[float] = 33.1,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "0_1918",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.01.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="heavy",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=223,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+
+    @classmethod
+    def get_02_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.9,
+        floor_area_in_m2: Optional[float] = 81.5,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.9,
+        facade_area_in_m2: Optional[float] = 183.5,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.44,
+        roof_area_in_m2: Optional[float] = 96,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.8,
+        window_area_in_m2: Optional[float] = 31.2,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "1919_1945",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.02.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="medium",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=195,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_03_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.98,
+        floor_area_in_m2: Optional[float] = 86.1,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.81,
+        facade_area_in_m2: Optional[float] = 167.55,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.44,
+        roof_area_in_m2: Optional[float] = 95.44,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.6,
+        window_area_in_m2: Optional[float] = 28.8,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "1946_1960",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.03.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="medium",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=180,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_04_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1,
+        floor_area_in_m2: Optional[float] = 99.2,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.7,
+        facade_area_in_m2: Optional[float] = 163.4,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.47,
+        roof_area_in_m2: Optional[float] = 108.8,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.7,
+        window_area_in_m2: Optional[float] = 30.4,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "1961_1970",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.04.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="heavy",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=190,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_05_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.88,
+        floor_area_in_m2: Optional[float] = 102.9,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.56,
+        facade_area_in_m2: Optional[float] = 162.6,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.41,
+        roof_area_in_m2: Optional[float] = 114.69,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.7,
+        window_area_in_m2: Optional[float] = 32,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "1971_1980",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.04.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="medium",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=200,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_06_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.61,
+        floor_area_in_m2: Optional[float] = 88.2,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.4,
+        facade_area_in_m2: Optional[float] = 160.2,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.36,
+        roof_area_in_m2: Optional[float] = 103.19,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.9,
+        window_area_in_m2: Optional[float] = 31.68,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "1981_1990",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.05.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="medium",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=198,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_07_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.55,
+        floor_area_in_m2: Optional[float] = 81,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.35,
+        facade_area_in_m2: Optional[float] = 164,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.34,
+        roof_area_in_m2: Optional[float] = 96,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.7,
+        window_area_in_m2: Optional[float] = 31.84,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "1991_2000",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.06.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="heavy",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=199,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_08_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.38,
+        floor_area_in_m2: Optional[float] = 84.2,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.3,
+        facade_area_in_m2: Optional[float] = 177.6,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.26,
+        roof_area_in_m2: Optional[float] = 96.76,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.5,
+        window_area_in_m2: Optional[float] = 32.16,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "2001_2010",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.07.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="heavy",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=201,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
+            predictive=False,
+            set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
+            set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
+            enable_opening_windows=False,
+            device_co2_footprint_in_kg=None,  # todo: check value
+            investment_costs_in_euro=None,   # todo: check value
+            maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
+            subsidy_as_percentage_of_investment_costs=None,
+            lifetime_in_years=None,  # todo: check value
+        )
+        return config
+    
+
+    @classmethod
+    def get_09_CH_single_family_home(
+        cls,
+        set_heating_temperature_in_celsius: float = 20.0,
+        set_cooling_temperature_in_celsius: float = 25.0,
+        heating_reference_temperature_in_celsius: float = -7.0,
+        max_thermal_building_demand_in_watt: Optional[float] = None,
+        floor_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.21,
+        floor_area_in_m2: Optional[float] = 93.9,
+        facade_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.17,
+        facade_area_in_m2: Optional[float] = 180.64,
+        roof_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 0.17,
+        roof_area_in_m2: Optional[float] = 100.3,
+        window_u_value_in_watt_per_m2_per_kelvin: Optional[float] = 1.0,
+        window_area_in_m2: Optional[float] = 37.30,
+        door_u_value_in_watt_per_m2_per_kelvin: Optional[float] = None,
+        door_area_in_m2: Optional[float] = None,
+        building_name: str = "2011_2019",
+    ) -> Any:
+        """Get a default Building."""
+        config = BuildingConfig(
+            building_name=building_name,
+            name="Building",
+            building_code="AT.N.SFH.08.Gen.ReEx.001.002", #AT.N.SFH.01.Gen.ReEx.001.002  DE.N.SFH.05.Gen.ReEx.001.002
+            building_heat_capacity_class="heavy",
+            initial_internal_temperature_in_celsius=22.0,
+            heating_reference_temperature_in_celsius=heating_reference_temperature_in_celsius,
+            absolute_conditioned_floor_area_in_m2=206,
+            max_thermal_building_demand_in_watt=max_thermal_building_demand_in_watt,
+            floor_u_value_in_watt_per_m2_per_kelvin=floor_u_value_in_watt_per_m2_per_kelvin,
+            floor_area_in_m2=floor_area_in_m2,
+            facade_u_value_in_watt_per_m2_per_kelvin=facade_u_value_in_watt_per_m2_per_kelvin,
+            facade_area_in_m2=facade_area_in_m2,
+            roof_u_value_in_watt_per_m2_per_kelvin=roof_u_value_in_watt_per_m2_per_kelvin,
+            roof_area_in_m2=roof_area_in_m2,
+            window_u_value_in_watt_per_m2_per_kelvin=window_u_value_in_watt_per_m2_per_kelvin,
+            window_area_in_m2=window_area_in_m2,
+            door_u_value_in_watt_per_m2_per_kelvin=door_u_value_in_watt_per_m2_per_kelvin,
+            door_area_in_m2=door_area_in_m2,
+            total_base_area_in_m2=None,
+            number_of_apartments=1,
             predictive=False,
             set_heating_temperature_in_celsius=set_heating_temperature_in_celsius,
             set_cooling_temperature_in_celsius=set_cooling_temperature_in_celsius,
