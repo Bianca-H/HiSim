@@ -729,6 +729,7 @@ class Building(cp.Component):
     DiffuseHorizontalIrradiance = "DiffuseHorizontalIrradiance"
     GlobalHorizontalIrradiance = "GlobalHorizontalIrradiance"
     TemperatureOutside = "TemperatureOutside"
+    RunningAverageOutsideTemperature24h = "RunningAverageOutsideTemperature24h"
 
     # Inputs -> energy management system
     BuildingTemperatureModifier = "BuildingTemperatureModifier"
@@ -737,6 +738,11 @@ class Building(cp.Component):
     TemperatureMeanThermalMass = "TemperatureMeanThermalMass"
     TemperatureInternalSurface = "TemperatureInternalSurface"
     TemperatureIndoorAir = "TemperatureIndoorAir"
+    TemperatureOperative = "TemperatureOperative" #blubblub
+    TemperatureComfortLowerBound = "TemperatureComfortLowerBound"
+    TemperatureComfortUpperBound = "TemperatureComfortUpperBound"
+    TemperatureOverTemperatureDegreeHours = "TemperatureOverTemperatureDegreeHours"
+    TemperatureUnderTemperatureDegreeHours = "TemperatureUnderTemperatureDegreeHours"
     TotalThermalPowerToResidence = "TotalThermalPowerToResidence"
     SolarGainThroughWindows = "SolarGainThroughWindows"
     InternalHeatGainsFromOccupancy = "InternalHeatGainsFromOccupancy"
@@ -877,6 +883,14 @@ class Building(cp.Component):
             True,
         )
 
+        self.running_average_outside_temperature_24h_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.RunningAverageOutsideTemperature24h,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            False,
+        )
+
         self.occupancy_heat_gain_channel: cp.ComponentInput = self.add_input(
             self.component_name,
             self.HeatingByResidents,
@@ -922,6 +936,41 @@ class Building(cp.Component):
             lt.LoadTypes.TEMPERATURE,
             lt.Units.CELSIUS,
             output_description=f"here a description for {self.TemperatureIndoorAir} will follow.",
+        )
+        self.operative_temperature_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.TemperatureOperative,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            output_description=f"here a description for {self.TemperatureOperative} will follow.",
+        )
+        self.temperature_comfort_lower_bound_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.TemperatureComfortLowerBound,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            output_description=f"here a description for {self.TemperatureComfortLowerBound} will follow.",
+        )
+        self.temperature_comfort_upper_bound_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.TemperatureComfortUpperBound,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            output_description=f"here a description for {self.TemperatureComfortUpperBound} will follow.",
+        )
+        self.temperature_over_temperature_degree_hours_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.TemperatureOverTemperatureDegreeHours,
+            lt.LoadTypes.ANY,
+            lt.Units.HOURS,
+            output_description=f"Overtemperature degree-hours above comfort upper bound (per timestep).",
+        )
+        self.temperature_under_temperature_degree_hours_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.TemperatureUnderTemperatureDegreeHours,
+            lt.LoadTypes.ANY,
+            lt.Units.HOURS,
+            output_description=f"Undertemperature degree-hours below comfort lower bound (per timestep).",
         )
         self.total_thermal_power_to_residence_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
@@ -1090,6 +1139,13 @@ class Building(cp.Component):
                 Weather.TemperatureOutside,
             )
         )
+        connections.append(
+            cp.ComponentConnection(
+                Building.RunningAverageOutsideTemperature24h,
+                weather_classname,
+                Weather.RunningAverageOutsideTemperature24h,
+            )
+        )
 
         return connections
 
@@ -1195,6 +1251,12 @@ class Building(cp.Component):
         internal_heat_gains_through_devices_in_watt = stsv.get_input_value(self.device_heat_gain_channel)
 
         temperature_outside_in_celsius = stsv.get_input_value(self.temperature_outside_channel)
+
+        running_average_outside_temperature_in_celsius = stsv.get_input_value(
+            self.running_average_outside_temperature_24h_channel
+        )
+        if self.running_average_outside_temperature_24h_channel.source_output is None:
+            running_average_outside_temperature_in_celsius = temperature_outside_in_celsius
 
         building_temperature_modifier = stsv.get_input_value(self.building_temperature_modifier_channel)
 
@@ -1314,6 +1376,51 @@ class Building(cp.Component):
         stsv.set_output_value(
             self.indoor_air_temperature_channel,
             indoor_air_temperature_in_celsius,
+        )
+        stsv.set_output_value(
+            self.operative_temperature_channel,
+            (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2,
+        )
+        operative_temperature_in_celsius = (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2
+        # Comfort temperature band dependent on 24h running average outdoor air temperature.
+        # Lower bound:
+        #   x <= 19°C  -> 20.5°C
+        #   19..23°C   -> linearly to 22.0°C
+        #   x >= 23°C  -> 22.0°C
+        x = running_average_outside_temperature_in_celsius
+        if x <= 19.0:
+            comfort_lower_bound = 20.5
+        elif x >= 23.0:
+            comfort_lower_bound = 22.0
+        else:
+            comfort_lower_bound = 20.5 + (x - 19.0) * (22.0 - 20.5) / (23.0 - 19.0)
+
+        # Upper bound:
+        #   x <= 12°C  -> 24.5°C
+        #   12..17°C   -> linearly to 26.5°C
+        #   x >= 17°C  -> 26.5°C
+        if x <= 12.0:
+            comfort_upper_bound = 24.5
+        elif x >= 17.0:
+            comfort_upper_bound = 26.5
+        else:
+            comfort_upper_bound = 24.5 + (x - 12.0) * (26.5 - 24.5) / (17.0 - 12.0)
+
+        stsv.set_output_value(self.temperature_comfort_lower_bound_channel, comfort_lower_bound)
+        stsv.set_output_value(self.temperature_comfort_upper_bound_channel, comfort_upper_bound)
+
+        # Degree-hours contribution per timestep.
+        # Uses the timestep duration in hours (dt_h), so that summing over timesteps yields total degree-hours.
+        dt_h = self.my_simulation_parameters.seconds_per_timestep / 3600.0
+        temperature_over_limit_degree_hours = max(0.0, operative_temperature_in_celsius - comfort_upper_bound) * dt_h
+        temperature_under_limit_degree_hours = max(0.0, comfort_lower_bound - operative_temperature_in_celsius) * dt_h
+        stsv.set_output_value(
+            self.temperature_over_temperature_degree_hours_channel,
+            temperature_over_limit_degree_hours,
+        )
+        stsv.set_output_value(
+            self.temperature_under_temperature_degree_hours_channel,
+            temperature_under_limit_degree_hours,
         )
 
         stsv.set_output_value(self.total_thermal_power_to_residence_channel, total_thermal_power_to_residence_in_watt)
@@ -2436,6 +2543,8 @@ class Building(cp.Component):
             + self.thermal_conductance_by_ventilation_in_watt_per_kelvin
         )
 
+
+
     def calc_crank_nicolson(
         self,
         internal_heat_gains_in_watt: float,
@@ -2503,6 +2612,9 @@ class Building(cp.Component):
             thermal_power_delivered_in_watt,
             heat_flux_indoor_air_in_watt=heat_flux_to_indoor_air_in_watt,
         )
+
+        # Updates operative temperature (t_op)
+        #operative_temperature_in_celsius = (indoor_air_temperature_in_celsius + internal_room_surface_temperature_in_celsius) / 2
 
         return (
             thermal_mass_average_bulk_temperature_in_celsius,

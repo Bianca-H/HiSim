@@ -442,6 +442,7 @@ class Weather(Component):
     Pressure = "Pressure"
     Weather_Temperature_Forecast_24h = "Weather_Temperature_Forecast_24h"
     DailyAverageOutsideTemperatures = "DailyAverageOutsideTemperatures"
+    RunningAverageOutsideTemperature24h = "RunningAverageOutsideTemperature24h"
 
     # Weather_TemperatureOutside_yearly_forecast = "Weather_TemperatureOutside_yearly_forecast"
     # Weather_DiffuseHorizontalIrradiance_yearly_forecast = "Weather_DiffuseHorizontalIrradiance_yearly_forecast"
@@ -565,6 +566,14 @@ class Weather(Component):
             output_description=f"here a description for {self.DailyAverageOutsideTemperatures} will follow.",
         )
 
+        self.running_average_outside_temperature_output: ComponentOutput = self.add_output(
+            self.component_name,
+            self.RunningAverageOutsideTemperature24h,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            output_description=f"here a description for {self.RunningAverageOutsideTemperature24h} will follow.",
+        )
+
         self.temperature_list: List[float]
         self.dni_list: List[float]
         self.dniextra_list: List[float]
@@ -577,6 +586,7 @@ class Weather(Component):
         self.dhi_list: List[float]
         self.dry_bulb_list: List[float]
         self.daily_average_outside_temperature_list_in_celsius: List[float]
+        self.running_average_outside_temperature_list_in_celsius: List[float]
 
     def write_to_report(self):
         """Write configuration to the report."""
@@ -618,6 +628,10 @@ class Weather(Component):
             self.daily_average_outside_temperature_output,
             self.daily_average_outside_temperature_list_in_celsius[timestep],
         )
+        stsv.set_output_value(
+            self.running_average_outside_temperature_output,
+            self.running_average_outside_temperature_list_in_celsius[timestep],
+        )
 
         # set the temperature forecast
         if self.weather_config.predictive_control:
@@ -645,6 +659,18 @@ class Weather(Component):
             my_weather = pd.read_csv(cache_filepath, sep=",", decimal=".", encoding="cp1252")
             self.temperature_list = my_weather["t_out"].tolist()
             self.daily_average_outside_temperature_list_in_celsius = my_weather["t_out_daily_average"].tolist()
+            if "t_out_running_average_24h" in my_weather.columns:
+                self.running_average_outside_temperature_list_in_celsius = my_weather[
+                    "t_out_running_average_24h"
+                ].tolist()
+            else:
+                # Older caches don't contain this column; recompute from `t_out`.
+                self.running_average_outside_temperature_list_in_celsius = (
+                    self.calculate_24h_running_average_outside_temperature(
+                        temperaturelist=self.temperature_list,
+                        seconds_per_timestep=seconds_per_timestep,
+                    )
+                )
             self.dry_bulb_list = self.temperature_list
             self.dhi_list = my_weather["DHI"].tolist()
             self.dni_list = my_weather["DNI"].tolist()  # self np.float64( maybe not needed? - Noah
@@ -708,6 +734,12 @@ class Weather(Component):
                     temperaturelist=self.temperature_list,
                     seconds_per_timestep=seconds_per_timestep,
                 )
+                self.running_average_outside_temperature_list_in_celsius = (
+                    self.calculate_24h_running_average_outside_temperature(
+                        temperaturelist=self.temperature_list,
+                        seconds_per_timestep=seconds_per_timestep,
+                    )
+                )
 
                 self.dhi_list = dhi.resample(str(seconds_per_timestep) + "S").mean().tolist()
                 # np.float64( ## not sure what this is fore. python float and npfloat 64 are the same.
@@ -725,6 +757,12 @@ class Weather(Component):
                 self.calculate_daily_average_outside_temperature(
                     temperaturelist=self.temperature_list,
                     seconds_per_timestep=seconds_per_timestep,
+                )
+                self.running_average_outside_temperature_list_in_celsius = (
+                    self.calculate_24h_running_average_outside_temperature(
+                        temperaturelist=self.temperature_list,
+                        seconds_per_timestep=seconds_per_timestep,
+                    )
                 )
                 self.dhi_list = dhi.tolist()
                 self.dni_list = dni.tolist()
@@ -749,6 +787,7 @@ class Weather(Component):
                 self.pressure_list,
                 self.dniextra_list,
                 self.daily_average_outside_temperature_list_in_celsius,
+                self.running_average_outside_temperature_list_in_celsius,
             ]
 
             database = pd.DataFrame(
@@ -766,6 +805,7 @@ class Weather(Component):
                     "Pressure",
                     "DNIextra",
                     "t_out_daily_average",
+                    "t_out_running_average_24h",
                 ],
             )
             database.to_csv(cache_filepath)
@@ -906,6 +946,18 @@ class Weather(Component):
                 start_index = index
             self.daily_average_outside_temperature_list_in_celsius.append(daily_average_temperature)
         return self.daily_average_outside_temperature_list_in_celsius
+
+    def calculate_24h_running_average_outside_temperature(
+        self, temperaturelist: List[float], seconds_per_timestep: int
+    ) -> List[float]:
+        """Calculate a 24h running average of the outside temperature.
+
+        The window size is derived from `seconds_per_timestep` (same convention as the daily average).
+        """
+        timestep_24h = max(1, int(24 * 3600 / seconds_per_timestep))
+        temperature_series = pd.Series(temperaturelist, dtype=float)
+        running_average_series = temperature_series.rolling(window=timestep_24h, min_periods=1).mean()
+        return running_average_series.tolist()
 
     def get_cost_opex(
         self,

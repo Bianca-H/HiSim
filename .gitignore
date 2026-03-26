@@ -200,3 +200,6 @@ system_setups/district_system_setup/results
 
 # history extension
 .history/
+
+# private
+private/
