@@ -1,0 +1,7 @@
+{
+  "mode": "matrix",
+  "setup": "basic_household",
+  "arch": ["01_CH", "02_CH", "03_CH", "04_CH", "05_CH", "06_CH", "07_CH", "08_CH", "09_CH"],
+  "weather": ["ZUESTA", "KLO", "BASSTA", "RUE"]
+}
+

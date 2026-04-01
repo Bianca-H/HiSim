@@ -11,6 +11,8 @@ from hisim.components import building
 from hisim.components import generic_heat_pump
 from hisim.components import electricity_meter
 from hisim import loadtypes
+from hisim import cli_overrides
+from hisim import log
 
 
 __authors__ = "Vitor Hugo Bellotto Zago, Noah Pflugradt"
@@ -52,6 +54,10 @@ def setup_function(
     offset = 0.5
     hp_mode = 2
 
+    # Defaults for optional CLI overrides (defined once, reused below)
+    default_arch = "01_CH"
+    default_weather = "ZUESTA"
+
     # =================================================================================================================================
     # Build Components
 
@@ -73,8 +79,32 @@ def setup_function(
     print(my_simulation_parameters.post_processing_options)
 
     # Build Building
-    my_building_config = building.BuildingConfig.get_09_CH_single_family_home()
+    my_building_config = cli_overrides.apply_building_archetype_override(
+        building_module=building,
+        arch_value=default_arch,
+    )
+    arch_override = cli_overrides.get_override("ARCH")
+    arch_used = default_arch
+    if arch_override is not None:
+        try:
+            my_building_config = cli_overrides.apply_building_archetype_override(
+                building_module=building,
+                arch_value=arch_override,
+            )
+            log.information(f"Applied CLI override ARCH={arch_override} to building configuration.")
+            arch_used = arch_override
+        except Exception:
+            log.warning(
+                f"CLI override ARCH={arch_override} was provided, but no matching "
+                f"`BuildingConfig.get_{arch_override}_single_family_home()` exists. Using default building config."
+            )
+            my_building_config = cli_overrides.apply_building_archetype_override(
+                building_module=building,
+                arch_value=default_arch,
+            )
+            arch_used = default_arch
     #my_building_config = building.BuildingConfig.get_default_german_single_family_home()
+    cli_overrides.set_used_value("ARCH", arch_used)
 
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
     # Build Occupancy
@@ -84,7 +114,31 @@ def setup_function(
     )
 
     # Build Weather
-    my_weather_config = weather.WeatherConfig.get_default(location_entry=weather.LocationEnum.KLO) #choose Weather location here AACHEN
+    my_weather_config = weather.WeatherConfig.get_default(
+        location_entry=getattr(weather.LocationEnum, default_weather)
+    ) #choose Weather location here AACHEN
+    weather_override = cli_overrides.get_override("WEATHER")
+    weather_used = default_weather
+    if weather_override is not None:
+        try:
+            my_weather_config = cli_overrides.apply_weather_location_override(
+                weather_module=weather,
+                weather_value=weather_override,
+                name="Weather",
+                building_name="BUI1",
+            )
+            log.information(f"Applied CLI override WEATHER={weather_override} to weather configuration.")
+            weather_used = weather_override
+        except Exception:
+            log.warning(
+                f"CLI override WEATHER={weather_override} was provided, but no matching "
+                f"`LocationEnum.{weather_override}` exists in `hisim.components.weather`. Using default weather config."
+            )
+            my_weather_config = weather.WeatherConfig.get_default(
+                location_entry=getattr(weather.LocationEnum, default_weather)
+            )
+            weather_used = default_weather
+    cli_overrides.set_used_value("WEATHER", weather_used)
     my_weather = weather.Weather(config=my_weather_config, my_simulation_parameters=my_simulation_parameters)
 
     # Build PV

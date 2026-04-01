@@ -1,0 +1,14 @@
+{
+  "mode": "commands",
+  "commands": [
+    {
+      "name": "baseline",
+      "cmd": "python ..\\hisim\\hisim_main.py basic_household ARCH=01_CH WEATHER=ZUESTA"
+    },
+    {
+      "name": "alt_weather",
+      "cmd": "python ..\\hisim\\hisim_main.py basic_household ARCH=01_CH WEATHER=BASSTA"
+    }
+  ]
+}
+

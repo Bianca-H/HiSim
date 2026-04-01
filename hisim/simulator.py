@@ -21,6 +21,7 @@ from hisim import utils
 from hisim import postprocessingoptions
 from hisim.loadtypes import Units
 from hisim.result_path_provider import ResultPathProviderSingleton, SortingOptionEnum
+from hisim import cli_overrides
 
 
 __authors__ = "Noah Pflugradt, Vitor Hugo Bellotto Zago, Maximillian Hillen"
@@ -192,10 +193,25 @@ class Simulator:
                 )
             else:
                 # if not, build a flat result path itself
+                # Naming scheme:
+                # <setup_without_household>_<ARCH>_<WEATHER>_<MMDD>_<HHMMSS>
+                setup_name = self.module_filename
+                setup_name_clean = setup_name.replace("household", "").replace("Household", "").replace("HOUSEHOLD", "")
+                setup_name_clean = setup_name_clean.strip("_- ")
+
+                arch_tag = cli_overrides.get_used_value("ARCH") or cli_overrides.get_override("ARCH") or "NA"
+                weather_tag = cli_overrides.get_used_value("WEATHER") or cli_overrides.get_override("WEATHER") or "NA"
+                if arch_tag == "NA":
+                    log.warning("No ARCH information recorded for result folder naming. Using NA.")
+                if weather_tag == "NA":
+                    log.warning("No WEATHER information recorded for result folder naming. Using NA.")
+
+                # Date without year
+                ResultPathProviderSingleton().datetime_string = datetime.datetime.now().strftime("%m%d_%H%M%S")
                 ResultPathProviderSingleton().set_important_result_path_information(
                     module_directory=self.module_directory,
-                    model_name=self.module_filename,
-                    variant_name=None,
+                    model_name=setup_name_clean,
+                    variant_name=f"{arch_tag}_{weather_tag}_",
                     scenario_hash_string=None,
                     sorting_option=SortingOptionEnum.FLAT,
                 )

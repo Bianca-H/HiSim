@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import hisim.simulator as sim
 from hisim import log
 from hisim.simulationparameters import SimulationParameters
+from hisim import cli_overrides
 
 load_dotenv()
 
@@ -103,13 +104,30 @@ if __name__ == "__main__":
         sys.exit(1)
     FILE_NAME = sys.argv[1]
     FUNCTION_NAME = "setup_function"
-    if len(sys.argv) == 2:
+    # Optional arguments:
+    # - a module config path (legacy positional)
+    # - key/value overrides like ARCH=01_CH WEATHER=BASSTA
+    module_config: Optional[str] = None
+    overrides: dict[str, str] = {}
+    for arg in sys.argv[2:]:
+        if "=" in arg:
+            key, value = arg.split("=", 1)
+            overrides[key.strip().upper()] = value.strip()
+        else:
+            # Keep backward compatibility: a single non key/value arg is treated as module config path.
+            if module_config is None:
+                module_config = arg
+            else:
+                log.warning(f"Ignoring unexpected extra argument: {arg}")
+
+    cli_overrides.set_overrides(overrides)
+
+    if module_config is None:
         log.information("calling " + FUNCTION_NAME + " from " + FILE_NAME)
         main(path_to_module=FILE_NAME)
-    if len(sys.argv) == 3:
-        MODULE_CONFIG = sys.argv[2]
-        log.information("calling " + FUNCTION_NAME + " from " + FILE_NAME + " with module config " + MODULE_CONFIG)
+    else:
+        log.information("calling " + FUNCTION_NAME + " from " + FILE_NAME + " with module config " + module_config)
         main(
             path_to_module=FILE_NAME,
-            my_module_config=MODULE_CONFIG,
+            my_module_config=module_config,
         )

@@ -204,6 +204,46 @@ opex_techno_economic_parameters = {
             "green_hydrogen_gas_footprint_in_kg_per_kwh": 0,  # kgCO2eq/kWh
         },
     },
+    "CH": {
+        2021: {
+            "electricity_costs_in_euro_per_kwh": 0.292,  # [23]
+            "electricity_footprint_in_kg_per_kwh": 0.167,  # [48]
+            "electricity_to_grid_revenue_in_euro_per_kwh": 0.06305,  # [25] mean of values
+            "gas_costs_in_euro_per_kwh": 0.1065,  # average from [26]
+            "gas_footprint_in_kg_per_kwh": 0.249,  # [48]
+            "oil_costs_in_euro_per_l": 1.089,  # [27]
+            "oil_footprint_in_kg_per_l": 0.352,  # [48]
+            "diesel_costs_in_euro_per_l": 1.54,  # average of 2025 values (up until September) [28]
+            "diesel_footprint_in_kg_per_l": 0.332,  # [48]
+            "pellet_costs_in_euro_per_t": 297.98,  # [29]
+            "pellet_footprint_in_kg_per_kwh": 0.026,  # [48]
+            "wood_chip_costs_in_euro_per_t": 307.02,  # [30]
+            "wood_chip_footprint_in_kg_per_kwh": 0.019,  # [48]
+            "district_heating_costs_in_euro_per_kwh": 0.1,  # average estimated based on [31]
+            "district_heating_footprint_in_kg_per_kwh": 0.179,  # [48] district heating average
+            "green_hydrogen_gas_costs_in_euro_per_kwh": 0.39,  # average value from [32]
+            "green_hydrogen_gas_footprint_in_kg_per_kwh": 0,  # [48]
+        },
+        2040: {
+            "electricity_costs_in_euro_per_kwh": 0.32,  # [33]
+            "electricity_footprint_in_kg_per_kwh": 0.007,  # [24]
+            "electricity_to_grid_revenue_in_euro_per_kwh": 0.06305,  # same as for 2025, no data on future development found
+            "gas_costs_in_euro_per_kwh": 0.16,  # [34]
+            "gas_footprint_in_kg_per_kwh": 0.249,  # [24]
+            "oil_costs_in_euro_per_l": 1.5,  # very rough average based on [35]
+            "oil_footprint_in_kg_per_l": 0.352,  # [24]
+            "diesel_costs_in_euro_per_l": 1.54,  # assume same value as 2025
+            "diesel_footprint_in_kg_per_l": 0.332,  # [24]
+            "pellet_costs_in_euro_per_t": 297.98,  # assume same value as 2025
+            "pellet_footprint_in_kg_per_kwh": 0.026,  # [24]
+            "wood_chip_costs_in_euro_per_t": 307.02,  # assume same value as 2025
+            "wood_chip_footprint_in_kg_per_kwh": 0.019,  # [24]
+            "district_heating_costs_in_euro_per_kwh": 0.1,  # assume same value as 2025
+            "district_heating_footprint_in_kg_per_kwh": 0.179,  # [24]
+            "green_hydrogen_gas_costs_in_euro_per_kwh": 0.39,  # assume same value as 2025
+            "green_hydrogen_gas_footprint_in_kg_per_kwh": 0,
+        }
+    },
     "AT": {
         2025: {
             "electricity_costs_in_euro_per_kwh": 0.292,  # [23]
@@ -319,6 +359,7 @@ Sources for capex techno-economic parameters:
         [45]: https://www.wko.at/netzwerke/infopoint-stromspeicher
         [46]: https://www.co2online.de/modernisieren-und-bauen/solarthermie/solarthermie-preise-kosten-amortisation/
         [47]: https://www.energieinstitut.at/privatpersonen/photovoltaik-und-solarthermie/solaranlagen
+        [48]: https://view.officeapps.live.com/op/view.aspx?src=https%3A%2F%2Fwww.kbob.admin.ch%2Fdam%2Fde%2Fsd-web%2F6F5wTHBrmsGh%2FOekobilanzdaten_%2520Baubereich_Donne_ecobilans_construction_2009-1-2022_v8.02.xlsx&wdOrigin=BROWSELINK
         """
 capex_techno_economic_parameters = {
     "DE": {
