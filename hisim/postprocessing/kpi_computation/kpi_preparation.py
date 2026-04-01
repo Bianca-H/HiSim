@@ -573,16 +573,37 @@ class KpiPreparation:
 
     def get_total_energy_self_sufficiency(
         self,
-        self_sufficency_rate_for_electricity_in_percent: float,
-        total_electricity_consumption_in_kwh: float,
-        gas_demand_from_grid_in_kwh: float,
-        total_gas_consumption_in_kwh: float,
-        other_fuel_consumption_in_kwh: float,
+        self_sufficency_rate_for_electricity_in_percent: any,
+        total_electricity_consumption_in_kwh: any,
+        gas_demand_from_grid_in_kwh: any,
+        total_gas_consumption_in_kwh: any,
+        other_fuel_consumption_in_kwh: any,
     ):
         """Calculate self-sufficiency including all energy consumptions for all loadtypes.
 
         Please note that the fuel meter has a self-sufficiency of 0% (all energy is pruchased).
         """
+        # Some scenarios do not provide the required electricity self-sufficiency KPI
+        # (e.g. no PV production or no electricity feed-in), in which case the KPI value is `None`.
+        # In that case we treat self-sufficiency for electricity as 0%.
+        if self_sufficency_rate_for_electricity_in_percent is None:
+            self_sufficency_rate_for_electricity_in_percent = 0.0
+        if total_electricity_consumption_in_kwh is None:
+            total_electricity_consumption_in_kwh = 0.0
+        if gas_demand_from_grid_in_kwh is None:
+            gas_demand_from_grid_in_kwh = 0.0
+        if total_gas_consumption_in_kwh is None:
+            total_gas_consumption_in_kwh = 0.0
+        if other_fuel_consumption_in_kwh is None:
+            other_fuel_consumption_in_kwh = 0.0
+
+        # Ensure numeric types
+        self_sufficency_rate_for_electricity_in_percent = float(self_sufficency_rate_for_electricity_in_percent)
+        total_electricity_consumption_in_kwh = float(total_electricity_consumption_in_kwh)
+        gas_demand_from_grid_in_kwh = float(gas_demand_from_grid_in_kwh)
+        total_gas_consumption_in_kwh = float(total_gas_consumption_in_kwh)
+        other_fuel_consumption_in_kwh = float(other_fuel_consumption_in_kwh)
+
         total_energy_consumption_in_kwh = (
             total_electricity_consumption_in_kwh + total_gas_consumption_in_kwh + other_fuel_consumption_in_kwh
         )
@@ -597,9 +618,10 @@ class KpiPreparation:
             + self_sufficiency_gas_in_percent * total_gas_consumption_in_kwh
             + self_suffciency_other_fuels_in_percent * other_fuel_consumption_in_kwh
         )
-        total_energy_self_sufficiency_in_percent = (
-            total_self_sufficient_energy_consumption_in_kwh / total_energy_consumption_in_kwh
-        )
+        if total_energy_consumption_in_kwh == 0:
+            return 0.0
+
+        total_energy_self_sufficiency_in_percent = total_self_sufficient_energy_consumption_in_kwh / total_energy_consumption_in_kwh
         return round(total_energy_self_sufficiency_in_percent, 2)
 
     def read_opex_and_capex_costs_from_results(self, building_object: str) -> None:

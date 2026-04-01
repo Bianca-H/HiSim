@@ -44,11 +44,11 @@ def setup_function(
 
     # Set Simulation Parameters
     year = 2021
-    seconds_per_timestep = 60
+    seconds_per_timestep = 3600
 
     # Set Heat Pump Controller
-    temperature_air_heating_in_celsius = 19.0
-    temperature_air_cooling_in_celsius = 24.0
+    temperature_air_heating_in_celsius = 19.0 #19
+    temperature_air_cooling_in_celsius = 24.0 
     offset = 0.5
     hp_mode = 2
 
@@ -73,7 +73,7 @@ def setup_function(
     print(my_simulation_parameters.post_processing_options)
 
     # Build Building
-    my_building_config = building.BuildingConfig.get_01_CH_single_family_home()
+    my_building_config = building.BuildingConfig.get_09_CH_single_family_home()
     #my_building_config = building.BuildingConfig.get_default_german_single_family_home()
 
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
@@ -84,7 +84,7 @@ def setup_function(
     )
 
     # Build Weather
-    my_weather_config = weather.WeatherConfig.get_default(location_entry=weather.LocationEnum.AACHEN)
+    my_weather_config = weather.WeatherConfig.get_default(location_entry=weather.LocationEnum.KLO) #choose Weather location here AACHEN
     my_weather = weather.Weather(config=my_weather_config, my_simulation_parameters=my_simulation_parameters)
 
     # Build PV

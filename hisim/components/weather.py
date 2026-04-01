@@ -5,6 +5,7 @@ import csv
 import datetime
 import math
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List
@@ -48,10 +49,15 @@ class WeatherDataSourceEnum(Enum):
     DWD_10MIN = 4
     ERA5 = 5
     DWD_15MIN = 6
+    CUSTOM_CSV = 7
 
 
 class LocationEnum(Enum):
     """contains all the locations and their corresponding directories."""
+
+    # Tuple format:
+    # - legacy: (location, folder_1, folder_2, filename_or_folder_3, data_source)
+    # - extended: (location, folder_1, folder_2, filename_or_folder_3, data_source, latitude, longitude)
 
     AACHEN = (
         "Aachen",
@@ -368,6 +374,42 @@ class LocationEnum(Enum):
         "1267064_42.69_23.30_2019.csv",
         WeatherDataSourceEnum.NSRDB_15MIN,
     )
+    ZUESTA = (
+        "Zurich",
+        "custom_csv",
+        "Zurich",
+        "ZUESTA_2023_DRY.csv",
+        WeatherDataSourceEnum.CUSTOM_CSV,
+        47.37759,  # latitude
+        8.530352,   # longitude
+    )
+    BASSTA = (
+        "Basel",
+        "custom_csv",
+        "Basel",
+        "BASSTA_2023_DRY.csv",
+        WeatherDataSourceEnum.CUSTOM_CSV,
+        47.558262,  # latitude
+        7.583405,   # longitude
+    )
+    KLO = (
+        "Kloten",
+        "custom_csv",
+        "Kloten",
+        "KLO_2023_DRY.csv",
+        WeatherDataSourceEnum.CUSTOM_CSV,
+        47.479611,  # latitude
+        8.535961,   # longitude
+    )
+    RUE = (
+        "Ruenenberg",
+        "custom_csv",
+        "Ruenenberg",
+        "RUE_2023_DRY.csv",
+        WeatherDataSourceEnum.CUSTOM_CSV,
+        47.434572,  # latitude
+        7.879414,   # longitude
+    )
 
 
 @dataclass
@@ -380,6 +422,8 @@ class WeatherConfig(ConfigBase):
     source_path: str
     data_source: WeatherDataSourceEnum
     predictive_control: bool
+    latitude: float | None = None
+    longitude: float | None = None
 
     @classmethod
     def get_main_classname(cls):
@@ -412,6 +456,11 @@ class WeatherConfig(ConfigBase):
             location_entry.value[2],
             location_entry.value[3],
         )
+        latitude = None
+        longitude = None
+        if len(location_entry.value) >= 7:
+            latitude = float(location_entry.value[5])
+            longitude = float(location_entry.value[6])
         config = WeatherConfig(
             building_name=building_name,
             name=name,
@@ -419,6 +468,8 @@ class WeatherConfig(ConfigBase):
             source_path=path,
             data_source=location_entry.value[4],
             predictive_control=False,
+            latitude=latitude,
+            longitude=longitude,
         )
         return config
 
@@ -648,10 +699,26 @@ class Weather(Component):
         """Generates the lists to be used later."""
         seconds_per_timestep = self.my_simulation_parameters.seconds_per_timestep
         log.information("Weather config: " + self.weather_config.to_json())  # type: ignore
-        location_dict = get_coordinates(
-            filepath=self.weather_config.source_path,
-            source_enum=self.weather_config.data_source,
-        )
+        if self.weather_config.data_source == WeatherDataSourceEnum.CUSTOM_CSV:
+            if self.weather_config.latitude is None or self.weather_config.longitude is None:
+                lat_lon = try_get_lat_lon_from_filename(self.weather_config.source_path)
+                if lat_lon is None:
+                    raise ValueError(
+                        "For WeatherDataSourceEnum.CUSTOM_CSV you must set `latitude` and `longitude` in WeatherConfig, "
+                        "or encode them in the filename like `..._<lat>_<lon>_....csv`."
+                    )
+                self.weather_config.latitude, self.weather_config.longitude = lat_lon
+            # Minimal location info needed for pvlib solar position.
+            location_dict = {
+                "name": "CustomCSV",
+                "latitude": self.weather_config.latitude,
+                "longitude": self.weather_config.longitude,
+            }
+        else:
+            location_dict = get_coordinates(
+                filepath=self.weather_config.source_path,
+                source_enum=self.weather_config.data_source,
+            )
         self.simulation_repository.set_entry("weather_location", location_dict)
         cachefound, cache_filepath = utils.get_cache_file(self.config.name, self.weather_config, self.my_simulation_parameters)
         if cachefound:
@@ -865,6 +932,9 @@ class Weather(Component):
         )
         pd_database = pd.concat([pd_database, firstday, lastday])
         pd_database = pd_database.sort_index()
+        # Resampling cannot handle duplicate labels; duplicates can occur when the input
+        # already contains boundary timestamps (e.g., custom CSV starting at 00:00).
+        pd_database = pd_database[~pd_database.index.duplicated(keep="first")]
         return pd_database.resample("1T").asfreq().interpolate(method="linear")
 
     def calc_sun_position(self, latitude_deg, longitude_deg, year, hoy):
@@ -1054,8 +1124,168 @@ def read_test_reference_year_data(weatherconfig: WeatherConfig, simulation_param
         data = read_dwd_15min_data(filepath, simulation_parameters)
     elif weatherconfig.data_source == WeatherDataSourceEnum.ERA5:
         data = read_era5_data(filepath, simulation_parameters.year)
+    elif weatherconfig.data_source == WeatherDataSourceEnum.CUSTOM_CSV:
+        data = read_custom_weather_csv(filepath, simulation_parameters=simulation_parameters)
 
     return data
+
+
+def read_custom_weather_csv(filepath: str, simulation_parameters: SimulationParameters) -> pd.DataFrame:
+    """Read a user-provided weather CSV and map it to HiSim weather inputs.
+
+    Expected columns (from the user description):
+    - station,time.yy,time.mm,time.dd,time.hh
+    - temp,relhum,vappres,dewpt,mixratio,wetbulb,enthalpy,precip,airpres,winddir,windmean,windmax
+    - rad.global,rad.direct,rad.diffus
+
+    Only a subset is required for the HiSim `Weather` component:
+    - temperature -> column `temp`
+    - wind speed -> column `windmean`
+    - air pressure -> column `airpres` (assumed hPa unless it looks like Pa)
+    - irradiances -> columns `rad.global` (GHI), `rad.direct` (DNI), `rad.diffus` (DHI)
+    """
+    data = pd.read_csv(filepath, encoding="utf-8")
+
+    required_columns = [
+        "time.yy",
+        "time.mm",
+        "time.dd",
+        "time.hh",
+        "temp",
+        "windmean",
+        "airpres",
+        "rad.global",
+        "rad.direct",
+        "rad.diffus",
+    ]
+    missing = [c for c in required_columns if c not in data.columns]
+    if missing:
+        raise ValueError(f"Custom weather CSV missing required columns: {missing}")
+
+    # Parse timestamps from month/day/hour columns and map them to the simulation period.
+    #
+    # IMPORTANT: Many "dry"/typical-year datasets are stitched from different calendar years
+    # (e.g. each month comes from a different year). For HiSim we treat this as a generic
+    # year profile and therefore IGNORE `time.yy`, mapping (mm,dd,hh) onto the simulation year.
+    mm_raw = pd.to_numeric(data["time.mm"], errors="coerce")
+    dd_raw = pd.to_numeric(data["time.dd"], errors="coerce")
+    hh_raw = pd.to_numeric(data["time.hh"], errors="coerce")
+
+    if mm_raw.isna().any() or dd_raw.isna().any() or hh_raw.isna().any():
+        bad_rows = data.loc[(mm_raw.isna() | dd_raw.isna() | hh_raw.isna()), ["time.mm", "time.dd", "time.hh"]].head(10)
+        raise ValueError(
+            "Custom weather CSV contains non-numeric values in time.mm/time.dd/time.hh. "
+            f"First bad rows:\n{bad_rows}"
+        )
+
+    mm = mm_raw.astype(int)
+    dd = dd_raw.astype(int)
+
+    # Hours: allow 0..23; if 24 occurs, interpret as 00:00 of next day.
+    hh_int = hh_raw.astype(int)
+    add_day = (hh_int == 24)
+    hh_int = hh_int.where(hh_int != 24, 0)
+
+    # Map onto the simulation start year and (if the simulation spans a year boundary)
+    # wrap timestamps that would fall before `start_date` into the next year.
+    target_year = int(simulation_parameters.start_date.year)
+
+    timestamps = pd.to_datetime(
+        {"year": target_year, "month": mm, "day": dd, "hour": hh_int},
+        errors="coerce",
+    )
+    if add_day.any():
+        timestamps = timestamps + pd.to_timedelta(add_day.astype(int), unit="D")
+
+    # Drop rows like Feb 29 when sim year is non-leap.
+    invalid_mask = timestamps.isna()
+    if invalid_mask.any():
+        data = data.loc[~invalid_mask].copy()
+        timestamps = timestamps.loc[~invalid_mask]
+
+    # HiSim expects tz-aware timestamps downstream.
+    # Handle DST transitions deterministically.
+    start = pd.Timestamp(simulation_parameters.start_date).tz_localize("Europe/Berlin")
+    end = pd.Timestamp(simulation_parameters.end_date).tz_localize("Europe/Berlin")
+
+    # If the simulation crosses into the next year (e.g. 2021-01-01 .. 2022-01-01),
+    # treat the typical-year data as repeating and wrap dates earlier than the start
+    # into the next year.
+    if end.year > start.year:
+        # Compare in naive time first (before tz_localize/DST handling).
+        start_naive = pd.Timestamp(simulation_parameters.start_date)
+        wrapped = timestamps.where(timestamps >= start_naive, timestamps + pd.DateOffset(years=1))
+        timestamps = pd.to_datetime(wrapped, errors="coerce")
+        # Drop any newly invalid rows (e.g. Feb 29 wrapped into non-leap year).
+        invalid_mask = timestamps.isna()
+        if invalid_mask.any():
+            data = data.loc[~invalid_mask].copy()
+            timestamps = timestamps.loc[~invalid_mask]
+
+    timestamps = timestamps.dt.tz_localize(
+        "Europe/Berlin",
+        ambiguous=False,
+        nonexistent="shift_forward",
+    )
+    data = data.set_index(timestamps).sort_index()
+    # Ensure a unique, strictly increasing index – resampling cannot handle duplicates.
+    # For duplicated timestamps (which can happen with stitched "dry" datasets),
+    # keep the first occurrence.
+    data = data[~data.index.duplicated(keep="first")]
+
+    temperature = data["temp"].astype(float)
+    wspd = data["windmean"].astype(float)
+
+    # Convert pressure to hPa if it appears to be in Pa.
+    pressure_raw = data["airpres"].astype(float)
+    pressure_median = float(pressure_raw.median())
+    pressure = pressure_raw / 100.0 if pressure_median > 2000 else pressure_raw
+
+    ghi = data["rad.global"].astype(float)
+    dni = data["rad.direct"].astype(float)
+    dhi = data["rad.diffus"].astype(float)
+
+    # Map to internal naming expected by HiSim weather processing.
+    out = pd.DataFrame(
+        {
+            "T": temperature,
+            "Wspd": wspd,
+            "Pressure": pressure,
+            "GHI": ghi,
+            "DNI": dni,
+            "DHI": dhi,
+        },
+        index=data.index,
+    )
+
+    # Filter to the simulation time range (more precise than only filtering by year).
+    # `Weather` later resamples/interpolates, so we just need coverage for the simulation period.
+    out = out[(out.index >= start) & (out.index < end)]
+    if out.empty:
+        raise ValueError(
+            "Custom weather CSV did not contain any rows matching the simulation time range "
+            f"{start} .. {end} after mapping to simulation year {target_year}."
+        )
+
+    return out
+
+
+def try_get_lat_lon_from_filename(path_or_filename: str) -> tuple[float, float] | None:
+    """Try to extract latitude/longitude from a filename like `..._59.33_18.06_....csv`.
+
+    Returns (lat, lon) if found, otherwise None.
+    """
+    base = os.path.basename(path_or_filename)
+    # Common NSRDB-like pattern: <id>_<lat>_<lon>_<year>.csv
+    match = re.search(r"_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)(?:_|\\.|$)", base)
+    if not match:
+        return None
+    try:
+        lat = float(match.group(1))
+        lon = float(match.group(2))
+    except ValueError:
+        return None
+    return (lat, lon)
 
 
 def read_dwd_try_data(filepath: str, year: int) -> pd.DataFrame:
