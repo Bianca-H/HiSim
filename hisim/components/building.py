@@ -752,6 +752,11 @@ class Building(cp.Component):
     TheoreticalHeatingEnergyDemand = "TheoreticalHeatingEnergyDemand"
     TheoreticalCoolingDemand = "TheoreticalCoolingDemand"
     TheoreticalCoolingEnergyDemand = "TheoreticalCoolingEnergyDemand"
+    ActualThermalBuildingSupply = "ActualThermalBuildingSupply"
+    ActualHeatingSupply = "ActualHeatingSupply"
+    ActualHeatingEnergySupply = "ActualHeatingEnergySupply"
+    ActualCoolingSupply = "ActualCoolingSupply"
+    ActualCoolingEnergySupply = "ActualCoolingEnergySupply"
     HeatFluxToInternalSurface = "HeatFluxToInternalSurface"
     HeatFluxToThermalMass = "HeatFluxToThermalMass"
     TotalThermalMassHeatFlux = "TotalThermalMassHeatFlux"
@@ -1036,6 +1041,41 @@ class Building(cp.Component):
             lt.LoadTypes.COOLING,
             lt.Units.WATT_HOUR,
             output_description="Theoretical cooling demand of the building (Kühlbedarf).",
+        )
+        self.actual_thermal_building_supply_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ActualThermalBuildingSupply,
+            lt.LoadTypes.HEATING,
+            lt.Units.WATT,
+            output_description="Actual thermal power supplied to the building by connected heating/cooling systems.",
+        )
+        self.actual_heating_supply_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ActualHeatingSupply,
+            lt.LoadTypes.HEATING,
+            lt.Units.WATT,
+            output_description="Actual heating power supplied to the building (positive part of supplied thermal power).",
+        )
+        self.actual_heating_energy_supply_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ActualHeatingEnergySupply,
+            lt.LoadTypes.HEATING,
+            lt.Units.WATT_HOUR,
+            output_description="Actual heating energy supplied to the building (Wh per timestep).",
+        )
+        self.actual_cooling_supply_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ActualCoolingSupply,
+            lt.LoadTypes.COOLING,
+            lt.Units.WATT,
+            output_description="Actual cooling power supplied to the building (negative part of supplied thermal power).",
+        )
+        self.actual_cooling_energy_supply_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ActualCoolingEnergySupply,
+            lt.LoadTypes.COOLING,
+            lt.Units.WATT_HOUR,
+            output_description="Actual cooling energy supplied to the building (Wh per timestep, negative).",
         )
         self.heat_flow_rate_to_thermal_mass_node_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
@@ -1363,6 +1403,17 @@ class Building(cp.Component):
             theoretical_cooling_demand_in_watt * self.my_simulation_parameters.seconds_per_timestep / 3.6e3
         )
 
+        # Actual supplied thermal power from connected systems (split into heating/cooling to avoid averaging out).
+        actual_thermal_building_supply_in_watt = thermal_power_delivered_in_watt
+        actual_heating_supply_in_watt = actual_thermal_building_supply_in_watt if actual_thermal_building_supply_in_watt > 0 else 0.0
+        actual_cooling_supply_in_watt = actual_thermal_building_supply_in_watt if actual_thermal_building_supply_in_watt < 0 else 0.0
+        actual_heating_energy_supply_in_watt_hour = (
+            actual_heating_supply_in_watt * self.my_simulation_parameters.seconds_per_timestep / 3.6e3
+        )
+        actual_cooling_energy_supply_in_watt_hour = (
+            actual_cooling_supply_in_watt * self.my_simulation_parameters.seconds_per_timestep / 3.6e3
+        )
+
         # Returns outputs
         stsv.set_output_value(
             self.thermal_mass_temperature_channel,
@@ -1412,8 +1463,15 @@ class Building(cp.Component):
         # Degree-hours contribution per timestep.
         # Uses the timestep duration in hours (dt_h), so that summing over timesteps yields total degree-hours.
         dt_h = self.my_simulation_parameters.seconds_per_timestep / 3600.0
-        temperature_over_limit_degree_hours = max(0.0, operative_temperature_in_celsius - comfort_upper_bound) * dt_h
-        temperature_under_limit_degree_hours = max(0.0, comfort_lower_bound - operative_temperature_in_celsius) * dt_h
+        # Count degree-hours only when at least one person is present.
+        # We use occupant sensible heat gains as a robust proxy for presence across different occupancy models.
+        people_present = 1.0 if internal_heat_gains_through_occupancy_in_watt > 0.0 else 0.0
+        temperature_over_limit_degree_hours = (
+            max(0.0, operative_temperature_in_celsius - comfort_upper_bound) * dt_h * people_present
+        )
+        temperature_under_limit_degree_hours = (
+            max(0.0, comfort_lower_bound - operative_temperature_in_celsius) * dt_h * people_present
+        )
         stsv.set_output_value(
             self.temperature_over_temperature_degree_hours_channel,
             temperature_over_limit_degree_hours,
@@ -1460,6 +1518,12 @@ class Building(cp.Component):
             self.theoretical_cooling_energy_demand_channel,
             theoretical_cooling_energy_demand_in_watt_hour,
         )
+
+        stsv.set_output_value(self.actual_thermal_building_supply_channel, actual_thermal_building_supply_in_watt)
+        stsv.set_output_value(self.actual_heating_supply_channel, actual_heating_supply_in_watt)
+        stsv.set_output_value(self.actual_heating_energy_supply_channel, actual_heating_energy_supply_in_watt_hour)
+        stsv.set_output_value(self.actual_cooling_supply_channel, actual_cooling_supply_in_watt)
+        stsv.set_output_value(self.actual_cooling_energy_supply_channel, actual_cooling_energy_supply_in_watt_hour)
 
         stsv.set_output_value(
             self.heat_flow_rate_to_thermal_mass_node_channel,

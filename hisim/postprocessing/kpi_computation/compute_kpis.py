@@ -11,6 +11,7 @@ from typing import List, Dict
 from dataclasses import dataclass
 from dataclass_wizard import JSONWizard
 from hisim.loadtypes import DistrictNames
+from hisim.loadtypes import InandOutputType, LoadTypes, Units
 from hisim.postprocessing.postprocessing_datatransfer import PostProcessingDataTransfer
 from hisim.postprocessing.kpi_computation.kpi_preparation import KpiPreparation, KpiTagEnumClass
 
@@ -170,6 +171,97 @@ class KpiGenerator(JSONWizard, KpiPreparation):
 
         # get capex and opex costs
         self.read_opex_and_capex_costs_from_results(building_object=building_objects_in_district)
+
+        # ---------------------------------------------------------------------------------
+        # Peak-to-average load ratios (yearly peak load / yearly average load)
+        # ---------------------------------------------------------------------------------
+        # DHW heating (aggregate all thermal power outputs tagged as WATER_HEATING)
+        dhw_power_w = self._get_power_series_by_flags(
+            building_objects_in_district=building_objects_in_district,
+            required_flags=[InandOutputType.WATER_HEATING],
+            load_type=LoadTypes.HEATING,
+        ).clip(lower=0.0)
+
+        # Space heating:
+        # Prefer "actual heating supplied to the building" from the Building component, then subtract DHW.
+        # This yields robust results even when thermal producers are not tagged with InandOutputType.HEATING.
+        total_heating_supply_w = None
+        for idx, outp in enumerate(self.all_outputs):
+            if not (
+                building_objects_in_district == outp.component_name.split("_")[0]
+                or not self.simulation_parameters.multiple_buildings
+            ):
+                continue
+            if outp.unit != Units.WATT:
+                continue
+            if outp.field_name == "ActualHeatingSupply" and outp.component_name.endswith("Building"):
+                total_heating_supply_w = self.results.iloc[:, idx].astype(float).clip(lower=0.0)
+                break
+
+        if total_heating_supply_w is None:
+            # Fallback if Building actual supply output is unavailable: try tagged space-heating producers.
+            total_heating_supply_w = self._get_power_series_by_flags(
+                building_objects_in_district=building_objects_in_district,
+                required_flags=[InandOutputType.HEATING],
+                load_type=LoadTypes.HEATING,
+            ).clip(lower=0.0)
+
+        sh_power_w = total_heating_supply_w.sub(dhw_power_w, fill_value=0.0).clip(lower=0.0)
+        self._add_peak_to_average_kpi(
+            building_objects_in_district=building_objects_in_district,
+            kpi_name="Peak-to-average load ratio - Space heating",
+            power_timeseries_in_watt=sh_power_w,
+            kpi_tag=KpiTagEnumClass.BUILDING,
+            description="Yearly peak space-heating power divided by yearly average space-heating power.",
+        )
+
+        self._add_peak_to_average_kpi(
+            building_objects_in_district=building_objects_in_district,
+            kpi_name="Peak-to-average load ratio - DHW",
+            power_timeseries_in_watt=dhw_power_w,
+            kpi_tag=KpiTagEnumClass.BUILDING,
+            description="Yearly peak DHW heating power divided by yearly average DHW heating power.",
+        )
+
+        # Cooling (aggregate all COOLING load outputs, use magnitude for peak/avg)
+        cooling_indices: list[int] = []
+        for idx, outp in enumerate(self.all_outputs):
+            if not (
+                building_objects_in_district == outp.component_name.split("_")[0]
+                or not self.simulation_parameters.multiple_buildings
+            ):
+                continue
+            if outp.unit != Units.WATT:
+                continue
+            if outp.load_type != LoadTypes.COOLING:
+                continue
+            cooling_indices.append(idx)
+        if len(cooling_indices) > 0:
+            cooling_power_signed_w = self.results.iloc[:, cooling_indices].sum(axis=1)
+            cooling_power_w = (-cooling_power_signed_w).clip(lower=0.0)
+        else:
+            cooling_power_w = self.results.iloc[:, 0] * 0.0
+        self._add_peak_to_average_kpi(
+            building_objects_in_district=building_objects_in_district,
+            kpi_name="Peak-to-average load ratio - Cooling",
+            power_timeseries_in_watt=cooling_power_w,
+            kpi_tag=KpiTagEnumClass.BUILDING,
+            description="Yearly peak cooling power divided by yearly average cooling power (using cooling magnitude).",
+        )
+
+        # Electricity (use total consumption power series already built from postprocessing flags)
+        electricity_power_w = self.filtered_result_dataframe["total_consumption"].clip(lower=0.0)
+        self._add_peak_to_average_kpi(
+            building_objects_in_district=building_objects_in_district,
+            kpi_name="Peak-to-average load ratio - Electricity consumption",
+            power_timeseries_in_watt=electricity_power_w,
+            kpi_tag=(
+                KpiTagEnumClass.GENERAL
+                if not any(word in building_objects_in_district for word in DistrictNames)
+                else KpiTagEnumClass.ELECTRICITY_GRID
+            ),
+            description="Yearly peak electricity consumption divided by yearly average electricity consumption.",
+        )
 
     def create_overall_district_kpi(self, district_name):
         """Creation of overall district kpis."""

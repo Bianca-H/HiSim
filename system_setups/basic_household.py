@@ -10,6 +10,7 @@ from hisim.components import generic_pv_system
 from hisim.components import building
 from hisim.components import generic_heat_pump
 from hisim.components import electricity_meter
+from hisim.components import sia2024_occupancy
 from hisim import loadtypes
 from hisim import cli_overrides
 from hisim import log
@@ -107,11 +108,30 @@ def setup_function(
     cli_overrides.set_used_value("ARCH", arch_used)
 
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
-    # Build Occupancy
-    my_occupancy_config = loadprofilegenerator_utsp_connector.UtspLpgConnectorConfig.get_default_utsp_connector_config()
-    my_occupancy = loadprofilegenerator_utsp_connector.UtspLpgConnector(
-        config=my_occupancy_config, my_simulation_parameters=my_simulation_parameters
-    )
+    # Build Occupancy (choice: LPG/UTSP default, or SIA2024)
+    occ_mode = "SIA2024" #(cli_overrides.get_override("OCC") or "LPG").strip().upper()
+    if occ_mode == "SIA2024":
+        # `BuildingConfig.absolute_conditioned_floor_area_in_m2` is the user-configured size input.
+        # The Building later derives `scaled_conditioned_floor_area_in_m2` by scaling TABULA reference
+        # values with this configured area (so they match unless the config omits/overrides size inputs).
+        floor_area_m2 = float(my_building_config.absolute_conditioned_floor_area_in_m2 or 0.0)
+        sia_use_type = (cli_overrides.get_override("SIA_USE") or "residential").strip()
+        my_occupancy_config = sia2024_occupancy.SIA2024OccupancyConfig.get_default_for_use_type(
+            conditioned_floor_area_in_m2=floor_area_m2,
+            use_type=sia_use_type,
+            building_name="BUI1",
+            name="SIA2024Occupancy",
+        )
+        my_occupancy = sia2024_occupancy.SIA2024Occupancy(
+            config=my_occupancy_config, my_simulation_parameters=my_simulation_parameters
+        )
+        log.information(f"Using SIA 2024 schedules (SIA_USE={sia_use_type}, A_f={floor_area_m2:.1f} m2).")
+    else:
+        my_occupancy_config = loadprofilegenerator_utsp_connector.UtspLpgConnectorConfig.get_default_utsp_connector_config()
+        my_occupancy = loadprofilegenerator_utsp_connector.UtspLpgConnector(
+            config=my_occupancy_config, my_simulation_parameters=my_simulation_parameters
+        )
+        log.information("Using LPG/UTSP schedules (default). Set OCC=SIA2024 to switch.")
 
     # Build Weather
     my_weather_config = weather.WeatherConfig.get_default(
@@ -213,7 +233,30 @@ def setup_function(
         source_weight=999,
     )
 
-    my_building.connect_only_predefined_connections(my_weather, my_occupancy)
+    # Building: always connect weather defaults; occupancy depends on chosen mode
+    my_building.connect_only_predefined_connections(my_weather)
+    if occ_mode == "SIA2024":
+        my_building.connect_input(
+            my_building.HeatingByResidents,
+            my_occupancy.component_name,
+            my_occupancy.HeatingByResidents,
+        )
+        my_building.connect_input(
+            my_building.HeatingByDevices,
+            my_occupancy.component_name,
+            my_occupancy.HeatingByDevices,
+        )
+    else:
+        my_building.connect_input(
+            my_building.HeatingByResidents,
+            my_occupancy.component_name,
+            my_occupancy.HeatingByResidents,
+        )
+        my_building.connect_input(
+            my_building.HeatingByDevices,
+            my_occupancy.component_name,
+            my_occupancy.HeatingByDevices,
+        )
 
     my_building.connect_input(
         my_building.ThermalPowerDelivered,

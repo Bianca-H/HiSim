@@ -15,6 +15,10 @@ import pandas as pd
 from hisim import log
 from hisim import utils
 from hisim.component import ComponentOutput
+from hisim.components.configuration import EmissionFactorsAndCostsForFuelsConfig
+from hisim.components.electricity_meter import ElectricityMeter
+from hisim.components.gas_meter import GasMeter
+from hisim.components.fuel_meter import FuelMeter
 from hisim.components import building, loadprofilegenerator_utsp_connector
 from hisim.json_generator import JsonConfigurationGenerator
 from hisim.building_sizer_utils.interface_configs.kpi_config import KPIConfig
@@ -33,6 +37,7 @@ from hisim.postprocessing.system_chart import SystemChart
 from hisim.postprocessing.webtool_entries import WebtoolDict
 from hisim.postprocessingoptions import PostProcessingOptions
 from hisim.sim_repository_singleton import SingletonSimRepository, SingletonDictKeyEnum
+from hisim import loadtypes as lt
 from hisim.loadtypes import OutputPostprocessingRules
 
 
@@ -128,6 +133,10 @@ class PostProcessor:
 
         # Export all results to CSV
         if PostProcessingOptions.EXPORT_TO_CSV in ppdt.post_processing_options:
+            self.add_operational_emissions_outputs(ppdt)
+            self.add_operational_costs_outputs(ppdt)
+            self.add_car_operational_outputs(ppdt)
+            self.add_actual_heat_supply_split_outputs(ppdt)
             log.information("Making CSV exports.")
             start = timer()
             self.make_csv_export(ppdt)
@@ -368,6 +377,368 @@ class PostProcessor:
         """Exports all data to CSV."""
         log.information("Exporting to csv.")
         self.export_results_to_csv(ppdt)
+
+    def add_operational_emissions_outputs(self, ppdt: PostProcessingDataTransfer) -> None:
+        """Add operational emissions time series and monthly sums to ppdt results.
+
+        Emissions include all energy carriers consumed via meters:
+        - Electricity from grid (ElectricityMeter)
+        - Gas / Green hydrogen from grid (GasMeter)
+        - Other fuels and district heating (FuelMeter)
+
+        Uses `EmissionFactorsAndCostsForFuelsConfig` factors for the simulation year/country.
+        """
+        if ppdt.results is None or len(ppdt.results.index) == 0:
+            return
+
+        factors = EmissionFactorsAndCostsForFuelsConfig.get_values_for_year(
+            year=ppdt.simulation_parameters.year,
+            country=ppdt.simulation_parameters.country,
+        )
+
+        total_emissions_kg = pd.Series(0.0, index=ppdt.results.index)
+
+        # Helper to find a column by component name + field name + unit
+        def find_output_col(component_name: str, field_name: str, unit: str) -> int | None:
+            for idx, outp in enumerate(ppdt.all_outputs):
+                if outp.component_name == component_name and outp.field_name == field_name and outp.unit == unit:
+                    return idx
+            return None
+
+        for wrapper in ppdt.wrapped_components:
+            comp = wrapper.my_component
+
+            # Electricity (kWh) -> kg
+            if isinstance(comp, ElectricityMeter):
+                idx = find_output_col(comp.component_name, comp.ElectricityFromGrid, "Wh")
+                if idx is not None:
+                    kwh = ppdt.results.iloc[:, idx] * 1e-3
+                    total_emissions_kg = total_emissions_kg.add(kwh * factors.electricity_footprint_in_kg_per_kwh, fill_value=0.0)
+
+            # Gas / H2 (kWh) -> kg
+            elif isinstance(comp, GasMeter):
+                idx = find_output_col(comp.component_name, comp.GasFromGrid, "Wh")
+                if idx is not None:
+                    kwh = ppdt.results.iloc[:, idx] * 1e-3
+                    if comp.config.gas_loadtype.value == "Gas":
+                        co2_per_kwh = factors.gas_footprint_in_kg_per_kwh
+                    else:
+                        # green hydrogen
+                        co2_per_kwh = factors.green_hydrogen_gas_footprint_in_kg_per_kwh
+                    total_emissions_kg = total_emissions_kg.add(kwh * co2_per_kwh, fill_value=0.0)
+
+            # Other fuels / district heating (metered as heat consumption in Wh)
+            elif isinstance(comp, FuelMeter):
+                idx = find_output_col(comp.component_name, comp.HeatConsumption, "Wh")
+                if idx is not None:
+                    kwh = ppdt.results.iloc[:, idx] * 1e-3
+                    loadtype = comp.config.fuel_loadtype.value
+                    if loadtype == "Oil":
+                        if comp.config.heating_value_of_fuel_in_kwh_per_liter is None:
+                            log.warning(
+                                f"FuelMeter {comp.component_name} is Oil but has no heating value. Skipping oil emissions."
+                            )
+                        else:
+                            liters = kwh / float(comp.config.heating_value_of_fuel_in_kwh_per_liter)
+                            total_emissions_kg = total_emissions_kg.add(liters * factors.oil_footprint_in_kg_per_l, fill_value=0.0)
+                    elif loadtype == "Pellets":
+                        total_emissions_kg = total_emissions_kg.add(kwh * factors.pellet_footprint_in_kg_per_kwh, fill_value=0.0)
+                    elif loadtype == "WoodChips":
+                        total_emissions_kg = total_emissions_kg.add(kwh * factors.wood_chip_footprint_in_kg_per_kwh, fill_value=0.0)
+                    elif loadtype == "DistrictHeating":
+                        total_emissions_kg = total_emissions_kg.add(kwh * factors.district_heating_footprint_in_kg_per_kwh, fill_value=0.0)
+
+        # Add per-timestep emissions to all_results
+        emissions_col_name = "PostProcessing - OperationalEmissionsTotal [Any - kgCO2eq]"
+        ppdt.results[emissions_col_name] = total_emissions_kg
+
+        # Add monthly sums if monthly results exist (so it shows up in monthly exports)
+        if ppdt.results_monthly is not None:
+            monthly_emissions = total_emissions_kg.resample("M").sum()
+            ppdt.results_monthly[emissions_col_name] = monthly_emissions
+
+    def add_operational_costs_outputs(self, ppdt: PostProcessingDataTransfer) -> None:
+        """Add operational energy cost time series and monthly sums to ppdt results.
+
+        Costs include all energy carriers consumed via meters:
+        - Electricity from grid (cost) and electricity to grid (revenue) via ElectricityMeter
+        - Gas / Green hydrogen from grid via GasMeter
+        - Other fuels and district heating via FuelMeter
+
+        Uses `EmissionFactorsAndCostsForFuelsConfig` costs for the simulation year/country.
+        """
+        if ppdt.results is None or len(ppdt.results.index) == 0:
+            return
+
+        factors = EmissionFactorsAndCostsForFuelsConfig.get_values_for_year(
+            year=ppdt.simulation_parameters.year,
+            country=ppdt.simulation_parameters.country,
+        )
+
+        # Payable costs are positive. Revenues are positive in their own series.
+        payable_costs_eur = pd.Series(0.0, index=ppdt.results.index)
+        revenue_from_feed_in_eur = pd.Series(0.0, index=ppdt.results.index)
+
+        def find_output_col(component_name: str, field_name: str, unit: str) -> int | None:
+            for idx, outp in enumerate(ppdt.all_outputs):
+                if outp.component_name == component_name and outp.field_name == field_name and outp.unit == unit:
+                    return idx
+            return None
+
+        for wrapper in ppdt.wrapped_components:
+            comp = wrapper.my_component
+
+            # Electricity: kWh from grid costs, kWh to grid yields revenue (negative cost)
+            if isinstance(comp, ElectricityMeter):
+                idx_from = find_output_col(comp.component_name, comp.ElectricityFromGrid, "Wh")
+                if idx_from is not None:
+                    kwh_from = ppdt.results.iloc[:, idx_from] * 1e-3
+                    payable_costs_eur = payable_costs_eur.add(
+                        kwh_from * factors.electricity_costs_in_euro_per_kwh,
+                        fill_value=0.0,
+                    )
+                idx_to = find_output_col(comp.component_name, comp.ElectricityToGrid, "Wh")
+                if idx_to is not None:
+                    kwh_to = ppdt.results.iloc[:, idx_to] * 1e-3
+                    revenue_from_feed_in_eur = revenue_from_feed_in_eur.add(
+                        kwh_to * factors.electricity_to_grid_revenue_in_euro_per_kwh,
+                        fill_value=0.0,
+                    )
+
+            # Gas / H2: kWh from grid costs
+            elif isinstance(comp, GasMeter):
+                idx = find_output_col(comp.component_name, comp.GasFromGrid, "Wh")
+                if idx is not None:
+                    kwh = ppdt.results.iloc[:, idx] * 1e-3
+                    if comp.config.gas_loadtype.value == "Gas":
+                        euro_per_kwh = factors.gas_costs_in_euro_per_kwh
+                    else:
+                        euro_per_kwh = factors.green_hydrogen_gas_costs_in_euro_per_kwh
+                    payable_costs_eur = payable_costs_eur.add(kwh * euro_per_kwh, fill_value=0.0)
+
+            # Other fuels / district heating (metered as heat consumption in Wh)
+            elif isinstance(comp, FuelMeter):
+                idx = find_output_col(comp.component_name, comp.HeatConsumption, "Wh")
+                if idx is not None:
+                    kwh = ppdt.results.iloc[:, idx] * 1e-3
+                    loadtype = comp.config.fuel_loadtype.value
+                    if loadtype == "DistrictHeating":
+                        payable_costs_eur = payable_costs_eur.add(
+                            kwh * factors.district_heating_costs_in_euro_per_kwh, fill_value=0.0
+                        )
+                    elif loadtype == "Oil":
+                        if comp.config.heating_value_of_fuel_in_kwh_per_liter is None:
+                            log.warning(
+                                f"FuelMeter {comp.component_name} is Oil but has no heating value. Skipping oil costs."
+                            )
+                        else:
+                            liters = kwh / float(comp.config.heating_value_of_fuel_in_kwh_per_liter)
+                            payable_costs_eur = payable_costs_eur.add(
+                                liters * factors.oil_costs_in_euro_per_l, fill_value=0.0
+                            )
+                    elif loadtype in {"Pellets", "WoodChips"}:
+                        # Convert kWh -> liter-equivalent via heating value, then -> kg via density, then -> t
+                        if (
+                            comp.config.heating_value_of_fuel_in_kwh_per_liter is None
+                            or comp.config.fuel_density_in_kg_per_m3 is None
+                        ):
+                            log.warning(
+                                f"FuelMeter {comp.component_name} is {loadtype} but has no heating value/density. Skipping costs."
+                            )
+                        else:
+                            liters = kwh / float(comp.config.heating_value_of_fuel_in_kwh_per_liter)
+                            kg = liters * 1e-3 * float(comp.config.fuel_density_in_kg_per_m3)
+                            tons = kg / 1000.0
+                            euro_per_t = (
+                                factors.pellet_costs_in_euro_per_t
+                                if loadtype == "Pellets"
+                                else factors.wood_chip_costs_in_euro_per_t
+                            )
+                            payable_costs_eur = payable_costs_eur.add(tons * euro_per_t, fill_value=0.0)
+
+        net_costs_eur = payable_costs_eur.sub(revenue_from_feed_in_eur, fill_value=0.0)
+
+        payable_col = "PostProcessing - OperationalCostsPayable [Any - EUR]"
+        revenue_col = "PostProcessing - OperationalRevenueElectricityToGrid [Any - EUR]"
+        net_col = "PostProcessing - OperationalCostsNet [Any - EUR]"
+        # Backwards-compatible alias (previously included revenue as negative cost)
+        #total_col = "PostProcessing - OperationalCostsTotal [Any - EUR]"
+
+        ppdt.results[payable_col] = payable_costs_eur
+        ppdt.results[revenue_col] = revenue_from_feed_in_eur
+        ppdt.results[net_col] = net_costs_eur
+        #ppdt.results[total_col] = net_costs_eur
+
+        if ppdt.results_monthly is not None:
+            ppdt.results_monthly[payable_col] = payable_costs_eur.resample("M").sum()
+            ppdt.results_monthly[revenue_col] = revenue_from_feed_in_eur.resample("M").sum()
+            ppdt.results_monthly[net_col] = net_costs_eur.resample("M").sum()
+            #ppdt.results_monthly[total_col] = net_costs_eur.resample("M").sum()
+
+    def add_car_operational_outputs(self, ppdt: PostProcessingDataTransfer) -> None:
+        """Add car-specific energy demand, operational costs, and operational emissions.
+
+        Supports:
+        - Diesel cars via `hisim.components.generic_car.Car` output `FuelConsumption [liter]`
+        - EV charging via `hisim.components.generic_ev_charger.EVCharger` output `ElectricityOutput [W]`
+        - (Optional) EV driving electricity directly from `Car.ElectricityOutput [W]` if used in a setup
+
+        Electricity costs/emissions are computed using the electricity factors for the simulation year/country.
+        Diesel costs/emissions are computed using diesel factors for the simulation year/country.
+        """
+        if ppdt.results is None or len(ppdt.results.index) == 0:
+            return
+
+        # Import locally to avoid heavier imports at module load time
+        from hisim.components.generic_car import Car as GenericCar  # pylint: disable=import-outside-toplevel
+        from hisim.components.generic_ev_charger import EVCharger  # pylint: disable=import-outside-toplevel
+
+        factors = EmissionFactorsAndCostsForFuelsConfig.get_values_for_year(
+            year=ppdt.simulation_parameters.year,
+            country=ppdt.simulation_parameters.country,
+        )
+
+        car_energy_kwh = pd.Series(0.0, index=ppdt.results.index)
+        car_costs_eur = pd.Series(0.0, index=ppdt.results.index)
+        car_emissions_kg = pd.Series(0.0, index=ppdt.results.index)
+
+        def find_output_col(component_name: str, field_name: str, unit: str) -> int | None:
+            for idx, outp in enumerate(ppdt.all_outputs):
+                if outp.component_name == component_name and outp.field_name == field_name and outp.unit == unit:
+                    return idx
+            return None
+
+        # Diesel energy conversion (used in generic_car KPIs too)
+        heating_value_diesel_kwh_per_l = 9.8
+
+        for wrapper in ppdt.wrapped_components:
+            comp = wrapper.my_component
+
+            # Diesel car: liters per timestep
+            if isinstance(comp, GenericCar) and getattr(comp.config, "fuel", None) == lt.LoadTypes.DIESEL:
+                idx_l = find_output_col(comp.component_name, comp.FuelConsumption, "Liter")
+                if idx_l is not None:
+                    liters = ppdt.results.iloc[:, idx_l]
+                    kwh = liters * heating_value_diesel_kwh_per_l
+                    car_energy_kwh = car_energy_kwh.add(kwh, fill_value=0.0)
+                    car_costs_eur = car_costs_eur.add(liters * factors.diesel_costs_in_euro_per_l, fill_value=0.0)
+                    car_emissions_kg = car_emissions_kg.add(liters * factors.diesel_footprint_in_kg_per_l, fill_value=0.0)
+
+            # EV car (driving electricity directly): W -> kWh
+            elif isinstance(comp, GenericCar) and getattr(comp.config, "fuel", None) == lt.LoadTypes.ELECTRICITY:
+                idx_w = find_output_col(comp.component_name, comp.ElectricityOutput, "W")
+                if idx_w is not None:
+                    w = ppdt.results.iloc[:, idx_w].clip(lower=0.0)
+                    kwh = w * ppdt.simulation_parameters.seconds_per_timestep / 3.6e6
+                    car_energy_kwh = car_energy_kwh.add(kwh, fill_value=0.0)
+                    car_costs_eur = car_costs_eur.add(kwh * factors.electricity_costs_in_euro_per_kwh, fill_value=0.0)
+                    car_emissions_kg = car_emissions_kg.add(kwh * factors.electricity_footprint_in_kg_per_kwh, fill_value=0.0)
+
+            # EV charging electricity: W -> kWh
+            elif isinstance(comp, EVCharger):
+                idx_w = find_output_col(comp.component_name, comp.ElectricityOutput, "W")
+                if idx_w is not None:
+                    w = ppdt.results.iloc[:, idx_w].clip(lower=0.0)
+                    kwh = w * ppdt.simulation_parameters.seconds_per_timestep / 3.6e6
+                    car_energy_kwh = car_energy_kwh.add(kwh, fill_value=0.0)
+                    car_costs_eur = car_costs_eur.add(kwh * factors.electricity_costs_in_euro_per_kwh, fill_value=0.0)
+                    car_emissions_kg = car_emissions_kg.add(kwh * factors.electricity_footprint_in_kg_per_kwh, fill_value=0.0)
+
+        # Only add columns if any car demand was found
+        if float(car_energy_kwh.sum()) == 0.0 and float(car_costs_eur.sum()) == 0.0 and float(car_emissions_kg.sum()) == 0.0:
+            return
+
+        energy_col = "PostProcessing - CarEnergyDemand [Any - kWh]"
+        costs_col = "PostProcessing - CarOperationalCosts [Any - EUR]"
+        emissions_col = "PostProcessing - CarOperationalEmissions [Any - kgCO2eq]"
+
+        ppdt.results[energy_col] = car_energy_kwh
+        ppdt.results[costs_col] = car_costs_eur
+        ppdt.results[emissions_col] = car_emissions_kg
+
+        if ppdt.results_monthly is not None:
+            ppdt.results_monthly[energy_col] = car_energy_kwh.resample("M").sum()
+            ppdt.results_monthly[costs_col] = car_costs_eur.resample("M").sum()
+            ppdt.results_monthly[emissions_col] = car_emissions_kg.resample("M").sum()
+
+    def add_actual_heat_supply_split_outputs(self, ppdt: PostProcessingDataTransfer) -> None:
+        """Split actual delivered heating into space heating vs DHW.
+
+        Many thermal producers mark their outputs with `postprocessing_flag` containing
+        `InandOutputType.HEATING` (space heating) or `InandOutputType.WATER_HEATING` (DHW).
+        This method tries to aggregate DHW via tags, and computes space heating as:
+        `SpaceHeating = TotalActualHeatingSupply - DHWHeatingSupply` (clipped to >= 0),
+        so that results are still available even if thermal producers are not tagged.
+
+        It provides *power* [W] time series per timestep and the corresponding *energy per timestep* [Wh].
+        """
+        if ppdt.results is None or len(ppdt.results.index) == 0:
+            return
+
+        dt_s = float(ppdt.simulation_parameters.seconds_per_timestep)
+
+        def _unit_eq(u: Any, expected: Any) -> bool:
+            return u == expected or str(u) == str(expected)
+
+        def _loadtype_eq(t: Any, expected: Any) -> bool:
+            return t == expected or str(t) == str(expected)
+
+        def find_output_col(component_name: str, field_name: str, unit: Any) -> int | None:
+            for idx, outp in enumerate(ppdt.all_outputs):
+                if outp.component_name == component_name and outp.field_name == field_name and _unit_eq(outp.unit, unit):
+                    return idx
+            return None
+
+        # Total actual heating supply to the building (prefer Building output; fallback to 0)
+        total_heating_supply_w = pd.Series(0.0, index=ppdt.results.index)
+        try:
+            idx_total = find_output_col("Building", "ActualHeatingSupply", lt.Units.WATT)
+            if idx_total is None:
+                # In multi-building cases, Building instance name can be prefixed (e.g. "BUI1_Building")
+                for out_idx, outp in enumerate(ppdt.all_outputs):
+                    if outp.field_name == "ActualHeatingSupply" and _unit_eq(outp.unit, lt.Units.WATT):
+                        idx_total = out_idx
+                        break
+            if idx_total is not None:
+                total_heating_supply_w = ppdt.results.iloc[:, idx_total].astype(float).clip(lower=0.0)
+        except Exception:
+            total_heating_supply_w = pd.Series(0.0, index=ppdt.results.index)
+
+        # pick only "thermal power" outputs (W) for DHW, not energies (Wh)
+        dhw_cols: list[int] = []
+        for idx, outp in enumerate(ppdt.all_outputs):
+            if not _unit_eq(outp.unit, lt.Units.WATT):
+                continue
+            if not _loadtype_eq(outp.load_type, lt.LoadTypes.HEATING):
+                continue
+            flags = outp.postprocessing_flag or []
+            if lt.InandOutputType.WATER_HEATING in flags:
+                dhw_cols.append(idx)
+
+        dhw_power_w = ppdt.results.iloc[:, dhw_cols].sum(axis=1) if len(dhw_cols) > 0 else pd.Series(0.0, index=ppdt.results.index)
+
+        # Keep only heating (positive part) to match "ActualHeatingSupply" semantics.
+        dhw_power_w = dhw_power_w.clip(lower=0.0)
+
+        # Space heating as residual (still gives results when components aren't tagged)
+        sh_power_w = total_heating_supply_w.sub(dhw_power_w, fill_value=0.0).clip(lower=0.0)
+
+        sh_energy_wh = sh_power_w * dt_s / 3600.0
+        dhw_energy_wh = dhw_power_w * dt_s / 3600.0
+
+        sh_power_col = "PostProcessing - ActualSpaceHeatingSupply [Any - W]"
+        sh_energy_col = "PostProcessing - ActualSpaceHeatingEnergySupply [Any - Wh]"
+        dhw_power_col = "PostProcessing - ActualDHWHeatingSupply [Any - W]"
+        dhw_energy_col = "PostProcessing - ActualDHWHeatingEnergySupply [Any - Wh]"
+
+        ppdt.results[sh_power_col] = sh_power_w
+        ppdt.results[sh_energy_col] = sh_energy_wh
+        ppdt.results[dhw_power_col] = dhw_power_w
+        ppdt.results[dhw_energy_col] = dhw_energy_wh
+
+        if ppdt.results_monthly is not None:
+            ppdt.results_monthly[sh_energy_col] = sh_energy_wh.resample("M").sum()
+            ppdt.results_monthly[dhw_energy_col] = dhw_energy_wh.resample("M").sum()
 
     def make_pkl_export(self, ppdt: PostProcessingDataTransfer) -> None:
         """Exports all data to Pickle."""
@@ -846,21 +1217,24 @@ class PostProcessor:
         )
         self.year = ppdt.simulation_parameters.year
 
-        # Time series
+        # Time series (wide format): first column is time, each variable its own column.
+        # This replaces the previous long/stacked pyam-like format for the scenario-evaluation CSVs.
         time_configs = [
-            ("hourly", ppdt.results_hourly, ppdt.results_hourly.index),
-            ("daily", ppdt.results_daily, ppdt.results_daily.index),
-            ("monthly", ppdt.results_monthly, ppdt.results_monthly.index),
+            ("hourly", ppdt.results_hourly),
+            ("daily", ppdt.results_daily),
+            ("monthly", ppdt.results_monthly),
         ]
 
-        for time_res, df, index in time_configs:
-            result_df = self.iterate_over_results_and_add_values_to_dict(results_df=df, timeseries=index)
-            self.write_filename_and_save_to_csv(
-                dataframe=result_df,
-                folder=self.result_data_folder_for_scenario_evaluation,
-                simulation_duration=ppdt.simulation_parameters.duration.days,
-                time_resolution_of_data=time_res,
+        for time_res, df in time_configs:
+            if df is None:
+                continue
+            wide_df = df.copy()
+            wide_df.insert(0, "time", wide_df.index)
+            filename = os.path.join(
+                self.result_data_folder_for_scenario_evaluation,
+                f"{time_res}_{ppdt.simulation_parameters.duration.days}_days.csv",
             )
+            wide_df.to_csv(path_or_buf=filename, index=False)
 
         # got through all components and read output values, variables and units for simple_dict_cumulative_data
         for column in ppdt.results_cumulative:
@@ -885,14 +1259,15 @@ class PostProcessor:
                 ppdt=ppdt, simple_dict_cumulative_data=simple_dict_cumulative_data
             )
 
-        # create dataframe
-        simple_df_yearly_data = pd.DataFrame(simple_dict_cumulative_data)
-        self.write_filename_and_save_to_csv(
-            dataframe=simple_df_yearly_data,
-            folder=self.result_data_folder_for_scenario_evaluation,
-            time_resolution_of_data="yearly",
-            simulation_duration=ppdt.simulation_parameters.duration.days,
-        )
+        # Yearly / cumulative (wide format): one row with columns per output.
+        if ppdt.results_cumulative is not None:
+            yearly_wide_df = ppdt.results_cumulative.copy()
+            yearly_wide_df.insert(0, "year", self.year)
+            filename = os.path.join(
+                self.result_data_folder_for_scenario_evaluation,
+                f"yearly_{ppdt.simulation_parameters.duration.days}_days.csv",
+            )
+            yearly_wide_df.to_csv(path_or_buf=filename, index=False)
 
         self.write_config_data_for_scenario_evaluation(ppdt)
 
@@ -1158,9 +1533,32 @@ class PostProcessor:
                     for key2, value2 in value1.items():
                         if key2 == target_key:
                             result = value2["value"]
-            if result is None:
-                raise KeyError(f"No key is matching the target key {target_key}.")
             return result
+
+        def fallback_conditioned_floor_area_from_building(building_object: str) -> Optional[float]:
+            """Try to read conditioned floor area directly from the Building component."""
+            try:
+                for wrapper in ppdt.wrapped_components:
+                    comp = wrapper.my_component
+                    if isinstance(comp, building.Building):
+                        # In multi-building runs, component_name is prefixed (e.g., "BUI1_Building")
+                        if ppdt.simulation_parameters.multiple_buildings:
+                            if not comp.component_name.startswith(building_object):
+                                continue
+                        return float(getattr(comp, "my_building_information").scaled_conditioned_floor_area_in_m2)
+            except Exception:
+                return None
+            return None
+
+        def get_kpi_value_or_default(data: dict, target_key: str, default: float = 0.0) -> float:
+            """Get KPI value for target_key or return default (as float)."""
+            value = get_kpi_entries_for_building_sizer(data=data, target_key=target_key)
+            if value is None:
+                return float(default)
+            try:
+                return float(value)
+            except Exception:
+                return float(default)
 
         kpi_dict = {}
 
@@ -1174,6 +1572,13 @@ class PostProcessor:
                 conditioned_floor_area_in_m2 = get_kpi_entries_for_building_sizer(
                     data=kpi_collection_dict, target_key="Conditioned floor area"
                 )
+                if conditioned_floor_area_in_m2 is None:
+                    conditioned_floor_area_in_m2 = fallback_conditioned_floor_area_from_building(building_object)
+                if conditioned_floor_area_in_m2 is None:
+                    raise KeyError(
+                        "Could not determine 'Conditioned floor area' for building sizer export. "
+                        "KPI not present and Building fallback failed."
+                    )
                 # Total costs
                 annualized_total_costs_in_euro = get_kpi_entries_for_building_sizer(
                     data=kpi_collection_dict, target_key="Total costs for simulated period"
@@ -1232,20 +1637,20 @@ class PostProcessor:
                 )
 
                 # Other
-                self_sufficiency_rate_electricity_in_percent = get_kpi_entries_for_building_sizer(
-                    data=kpi_collection_dict, target_key="Self-sufficiency rate according to solar htw berlin"
+                self_sufficiency_rate_electricity_in_percent = get_kpi_value_or_default(
+                    data=kpi_collection_dict, target_key="Self-sufficiency rate according to solar htw berlin", default=0.0
                 )
-                self_sufficiency_rate_all_energy_in_percent = get_kpi_entries_for_building_sizer(
-                    data=kpi_collection_dict, target_key="Total energy self-suffiency rate"
+                self_sufficiency_rate_all_energy_in_percent = get_kpi_value_or_default(
+                    data=kpi_collection_dict, target_key="Total energy self-suffiency rate", default=0.0
                 )
-                annualized_purchased_energy_consumption_in_kwh = get_kpi_entries_for_building_sizer(
-                    data=kpi_collection_dict, target_key="Purchased energy consumption for simulated period"
+                annualized_purchased_energy_consumption_in_kwh = get_kpi_value_or_default(
+                    data=kpi_collection_dict, target_key="Purchased energy consumption for simulated period", default=0.0
                 )
-                annualized_electricity_to_grid_in_kwh = get_kpi_entries_for_building_sizer(
-                    data=kpi_collection_dict, target_key="Total energy to grid"
+                annualized_electricity_to_grid_in_kwh = get_kpi_value_or_default(
+                    data=kpi_collection_dict, target_key="Total energy to grid", default=0.0
                 )
-                annualized_electricity_from_grid_in_kwh = get_kpi_entries_for_building_sizer(
-                    data=kpi_collection_dict, target_key="Total energy from grid"
+                annualized_electricity_from_grid_in_kwh = get_kpi_value_or_default(
+                    data=kpi_collection_dict, target_key="Total energy from grid", default=0.0
                 )
                 minimum_indoor_temperature_in_celsius = get_kpi_entries_for_building_sizer(
                     data=kpi_collection_dict, target_key="Minimum building indoor air temperature reached"

@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 from hisim.component import ComponentOutput
 from hisim.component_wrapper import ComponentWrapper
-from hisim.loadtypes import ComponentType, InandOutputType, DistrictNames
+from hisim.loadtypes import ComponentType, InandOutputType, DistrictNames, LoadTypes, Units
 from hisim import log
 from hisim.components.electricity_meter import ElectricityMeter
 from hisim.postprocessing.postprocessing_datatransfer import PostProcessingDataTransfer
@@ -147,6 +147,56 @@ class KpiPreparation:
 
         energy_in_kilowatt_hour = float(power_timeseries_in_watt.sum() * timeresolution / 3.6e6)
         return energy_in_kilowatt_hour
+
+    def _add_peak_to_average_kpi(
+        self,
+        building_objects_in_district: str,
+        kpi_name: str,
+        power_timeseries_in_watt: pd.Series,
+        kpi_tag: KpiTagEnumClass,
+        description: Optional[str] = None,
+    ) -> None:
+        """Add a KPI that is peak load divided by average load over the full simulation horizon."""
+        if power_timeseries_in_watt.empty:
+            value: Optional[float] = None
+        else:
+            avg = float(power_timeseries_in_watt.mean())
+            peak = float(power_timeseries_in_watt.max())
+            value = None if avg == 0 else peak / avg
+
+        entry = KpiEntry(
+            name=kpi_name,
+            unit="-",
+            value=value,
+            tag=kpi_tag,
+            description=description,
+        )
+        self.kpi_collection_dict_unsorted[building_objects_in_district].update({entry.name: entry.to_dict()})
+
+    def _get_power_series_by_flags(
+        self,
+        building_objects_in_district: str,
+        required_flags: List[InandOutputType],
+        load_type: Optional[LoadTypes] = None,
+    ) -> pd.Series:
+        """Aggregate power [W] across outputs matching all required flags."""
+        indices: List[int] = []
+        for idx, outp in enumerate(self.all_outputs):
+            if not (
+                building_objects_in_district == outp.component_name.split("_")[0]
+                or not self.simulation_parameters.multiple_buildings
+            ):
+                continue
+            if outp.unit != Units.WATT:
+                continue
+            if load_type is not None and outp.load_type != load_type:
+                continue
+            flags = outp.postprocessing_flag or []
+            if all(flag in flags for flag in required_flags):
+                indices.append(idx)
+        if len(indices) == 0:
+            return pd.Series(0.0, index=self.results.index)
+        return pd.DataFrame(self.results.iloc[:, indices]).sum(axis=1)
 
     def compute_electricity_consumption_and_production_and_battery_kpis(
         self,

@@ -35,7 +35,7 @@ class SimulationParameters(JSONWizard):
         start_date: datetime.datetime,
         end_date: datetime.datetime,
         seconds_per_timestep: int,
-        country: str = 'DE',
+        country: str = 'CH',
         result_directory: str = "",
         post_processing_options: Optional[List[int]] = None,
         logging_level: int = log.LogPrio.INFORMATION,
@@ -89,17 +89,23 @@ class SimulationParameters(JSONWizard):
 
     def enable_csv_only(self) -> None:
         """only csv as output"""
-        self.post_processing_options.append(PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER)
-        self.post_processing_options.append(PostProcessingOptions.EXPORT_TO_CSV)
-        self.post_processing_options.append(PostProcessingOptions.GENERATE_CSV_FOR_HOUSING_DATA_BASE)
-        self.post_processing_options.append(PostProcessingOptions.COMPUTE_OPEX)
-        self.post_processing_options.append(PostProcessingOptions.COMPUTE_CAPEX)
-        self.post_processing_options.append(PostProcessingOptions.COMPUTE_KPIS)
-        self.post_processing_options.append(PostProcessingOptions.PREPARE_OUTPUTS_FOR_SCENARIO_EVALUATION)
-        self.post_processing_options.append(PostProcessingOptions.WRITE_KPIS_TO_JSON_FOR_BUILDING_SIZER)
-        self.post_processing_options.append(PostProcessingOptions.WRITE_KPIS_TO_JSON)
-        self.post_processing_options.append(PostProcessingOptions.EXPORT_MONTHLY_RESULTS)
-        self.post_processing_options.append(PostProcessingOptions.EXPORT_RESULTS_IN_ONE_FILE)
+        desired = [
+            PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER,
+            PostProcessingOptions.EXPORT_TO_CSV,
+            PostProcessingOptions.GENERATE_CSV_FOR_HOUSING_DATA_BASE,
+            PostProcessingOptions.COMPUTE_OPEX,
+            PostProcessingOptions.COMPUTE_CAPEX,
+            PostProcessingOptions.COMPUTE_KPIS,
+            PostProcessingOptions.PREPARE_OUTPUTS_FOR_SCENARIO_EVALUATION,
+            PostProcessingOptions.WRITE_KPIS_TO_JSON_FOR_BUILDING_SIZER,
+            # Writes `all_kpis.json` to the result folder
+            PostProcessingOptions.WRITE_KPIS_TO_JSON,
+            PostProcessingOptions.EXPORT_MONTHLY_RESULTS,
+            PostProcessingOptions.EXPORT_RESULTS_IN_ONE_FILE,
+        ]
+        for opt in desired:
+            if opt not in self.post_processing_options:
+                self.post_processing_options.append(opt)
 
     @classmethod
     def full_year_all_options(cls, year: int, seconds_per_timestep: int) -> SimulationParameters:
