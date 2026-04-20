@@ -51,6 +51,8 @@ class L1BuildingHeatingConfig(cp.ConfigBase):
     t_min_heating_in_celsius: float
     #: upper set temperature of building, given in °C
     t_max_heating_in_celsius: float
+    #: if True, use adaptive comfort band from Building component as heating control band
+    use_adaptive_comfort_band: bool
     #: upper temperature of buffer, where heating of building is enforced.
     t_buffer_activation_threshold_in_celsius: float
     # julian day of simulation year, where heating season begins
@@ -70,6 +72,7 @@ class L1BuildingHeatingConfig(cp.ConfigBase):
             source_weight=1,
             t_min_heating_in_celsius=19.5,
             t_max_heating_in_celsius=20.5,
+            use_adaptive_comfort_band=True,
             t_buffer_activation_threshold_in_celsius=40.0,
             day_of_heating_season_begin=270,
             day_of_heating_season_end=150,
@@ -106,6 +109,8 @@ class L1BuildingHeatController(cp.Component):
     BuildingTemperature = "BuildingTemperature"
     BuildingTemperatureModifier = "BuildingTemperatureModifier"
     BufferTemperature = "BufferTemperature"
+    BuildingComfortLowerBound = "BuildingComfortLowerBound"
+    BuildingComfortUpperBound = "BuildingComfortUpperBound"
     # Outputs
     HeatControllerTargetPercentage = "HeatControllerTargetPercentage"
 
@@ -163,6 +168,22 @@ class L1BuildingHeatController(cp.Component):
             mandatory=True,
         )
 
+        self.building_comfort_lower_bound_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.BuildingComfortLowerBound,
+            LoadTypes.TEMPERATURE,
+            Units.CELSIUS,
+            mandatory=False,
+        )
+
+        self.building_comfort_upper_bound_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.BuildingComfortUpperBound,
+            LoadTypes.TEMPERATURE,
+            Units.CELSIUS,
+            mandatory=False,
+        )
+
         self.buffer_temperature_channel: cp.ComponentInput = self.add_input(
             self.component_name,
             self.BufferTemperature,
@@ -193,6 +214,20 @@ class L1BuildingHeatController(cp.Component):
                 L1BuildingHeatController.BuildingTemperature,
                 building_classname,
                 Building.TemperatureMeanThermalMass,
+            )
+        )
+        connections.append(
+            cp.ComponentConnection(
+                L1BuildingHeatController.BuildingComfortLowerBound,
+                building_classname,
+                Building.TemperatureComfortLowerBound,
+            )
+        )
+        connections.append(
+            cp.ComponentConnection(
+                L1BuildingHeatController.BuildingComfortUpperBound,
+                building_classname,
+                Building.TemperatureComfortUpperBound,
             )
         )
         return connections
@@ -238,6 +273,8 @@ class L1BuildingHeatController(cp.Component):
         t_control: float,
         t_buffer: float,
         temperature_modifier: float,
+        t_min_heating_in_celsius: float,
+        t_max_heating_in_celsius: float,
     ) -> None:
         """Controls the heating from buffer to building."""
         # prevent heating in summer
@@ -245,12 +282,12 @@ class L1BuildingHeatController(cp.Component):
             self.state.state = 0
             return
         # activate heating when building temperature is below lower threshold
-        if t_control < self.config.t_min_heating_in_celsius:
+        if t_control < t_min_heating_in_celsius:
             # start heating if temperature goes below lower limit
             self.state.state = 1
             return
         # deactivate heating when building temperature is above upper threshold
-        if t_control > self.config.t_max_heating_in_celsius + temperature_modifier:
+        if t_control > t_max_heating_in_celsius + temperature_modifier:
             self.state.state = 0
             return
         # deactivate heating when temperature modifier is zero and signal comes from surplus control.
@@ -261,10 +298,10 @@ class L1BuildingHeatController(cp.Component):
         # "surplus heat control" when storage is getting hot
         if temperature_modifier > 0 and t_buffer > self.config.t_buffer_activation_threshold_in_celsius:
             # heat with 75 % power and building can still be heated
-            if t_control < self.config.t_max_heating_in_celsius + temperature_modifier / 2:
+            if t_control < t_max_heating_in_celsius + temperature_modifier / 2:
                 self.state.state = 0.75
             # heat with 50 % power when storage is getting hot and building can still be heated, but is already on the upper side of the tolerance interval
-            elif t_control < self.config.t_max_heating_in_celsius + temperature_modifier:
+            elif t_control < t_max_heating_in_celsius + temperature_modifier:
                 self.state.state = 0.5
         return
 
@@ -292,11 +329,28 @@ class L1BuildingHeatController(cp.Component):
             else:
                 t_buffer = 0
             temperature_modifier = stsv.get_input_value(self.building_temperature_modifier_channel)
+
+            t_min_heating_in_celsius = self.config.t_min_heating_in_celsius
+            t_max_heating_in_celsius = self.config.t_max_heating_in_celsius
+            if (
+                self.config.use_adaptive_comfort_band
+                and self.building_comfort_lower_bound_channel.source_output is not None
+                and self.building_comfort_upper_bound_channel.source_output is not None
+            ):
+                comfort_lower = stsv.get_input_value(self.building_comfort_lower_bound_channel)
+                comfort_upper = stsv.get_input_value(self.building_comfort_upper_bound_channel)
+                # use the band only if it is valid
+                if comfort_upper > comfort_lower:
+                    t_min_heating_in_celsius = comfort_lower
+                    t_max_heating_in_celsius = comfort_upper
+
             self.control_heating(
                 timestep=timestep,
                 t_control=t_control,
                 t_buffer=t_buffer,
                 temperature_modifier=temperature_modifier,
+                t_min_heating_in_celsius=t_min_heating_in_celsius,
+                t_max_heating_in_celsius=t_max_heating_in_celsius,
             )
             self.processed_state = self.state.clone()
         stsv.set_output_value(self.heat_controller_target_percentage_channel, self.processed_state.state)

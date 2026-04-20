@@ -88,6 +88,7 @@ class GenericHeatPumpControllerConfig(cp.ConfigBase):
     temperature_air_cooling_in_celsius: float
     offset: float
     mode: int
+    use_adaptive_comfort_band: bool
 
     @classmethod
     def get_default_generic_heat_pump_controller_config(cls, building_name: str = "BUI1",) -> Any:
@@ -99,6 +100,7 @@ class GenericHeatPumpControllerConfig(cp.ConfigBase):
             temperature_air_cooling_in_celsius=26.0,
             offset=0.5,
             mode=1,
+            use_adaptive_comfort_band=True,
         )
 
 
@@ -606,6 +608,8 @@ class GenericHeatPumpController(cp.Component):
     # Inputs
     TemperatureMean = "Residence Temperature"
     ElectricityInput = "ElectricityInput"
+    TemperatureComfortLowerBound = "TemperatureComfortLowerBound"
+    TemperatureComfortUpperBound = "TemperatureComfortUpperBound"
 
     # Outputs
     State = "State"
@@ -651,6 +655,20 @@ class GenericHeatPumpController(cp.Component):
             lt.Units.WATT,
             False,
         )
+        self.temperature_comfort_lower_bound_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.TemperatureComfortLowerBound,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            False,
+        )
+        self.temperature_comfort_upper_bound_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.TemperatureComfortUpperBound,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            False,
+        )
         self.state_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
             self.State,
@@ -674,6 +692,20 @@ class GenericHeatPumpController(cp.Component):
                 GenericHeatPumpController.TemperatureMean,
                 building_classname,
                 Building.TemperatureMeanThermalMass,
+            )
+        )
+        connections.append(
+            cp.ComponentConnection(
+                GenericHeatPumpController.TemperatureComfortLowerBound,
+                building_classname,
+                Building.TemperatureComfortLowerBound,
+            )
+        )
+        connections.append(
+            cp.ComponentConnection(
+                GenericHeatPumpController.TemperatureComfortUpperBound,
+                building_classname,
+                Building.TemperatureComfortUpperBound,
             )
         )
         return connections
@@ -746,10 +778,32 @@ class GenericHeatPumpController(cp.Component):
             temperature_mean_old = stsv.get_input_value(self.temperature_mean_channel)
             electricity_input = stsv.get_input_value(self.electricity_input_channel)
 
+            effective_temperature_set_heating = self.temperature_set_heating
+            effective_temperature_set_cooling = self.temperature_set_cooling
+            if (
+                self.config.use_adaptive_comfort_band
+                and self.temperature_comfort_lower_bound_channel.source_output is not None
+                and self.temperature_comfort_upper_bound_channel.source_output is not None
+            ):
+                comfort_lower = stsv.get_input_value(self.temperature_comfort_lower_bound_channel)
+                comfort_upper = stsv.get_input_value(self.temperature_comfort_upper_bound_channel)
+                if comfort_upper > comfort_lower:
+                    effective_temperature_set_heating = comfort_lower
+                    effective_temperature_set_cooling = comfort_upper
+
             if self.mode == 1:
-                self.conditions(temperature_mean_old)
+                self.conditions(
+                    set_temperature=temperature_mean_old,
+                    heating_set_temperature=effective_temperature_set_heating,
+                    cooling_set_temperature=effective_temperature_set_cooling,
+                )
             elif self.mode == 2:
-                self.smart_conditions(temperature_mean_old, electricity_input)
+                self.smart_conditions(
+                    set_temperature=temperature_mean_old,
+                    electricity_input=electricity_input,
+                    heating_set_temperature=effective_temperature_set_heating,
+                    cooling_set_temperature=effective_temperature_set_cooling,
+                )
 
         if self.controller_heatpumpmode == "heating":
             state = 1
@@ -759,12 +813,12 @@ class GenericHeatPumpController(cp.Component):
             state = 0
         stsv.set_output_value(self.state_channel, state)
 
-    def conditions(self, set_temperature: float) -> None:
+    def conditions(self, set_temperature: float, heating_set_temperature: float, cooling_set_temperature: float) -> None:
         """Set conditions for the heat pump controller mode."""
-        maximum_heating_set_temperature = self.temperature_set_heating + self.offset
-        minimum_heating_set_temperature = self.temperature_set_heating
-        minimum_cooling_set_temperature = self.temperature_set_cooling - self.offset
-        maximum_cooling_set_temperature = self.temperature_set_cooling
+        maximum_heating_set_temperature = heating_set_temperature + self.offset
+        minimum_heating_set_temperature = heating_set_temperature
+        minimum_cooling_set_temperature = cooling_set_temperature - self.offset
+        maximum_cooling_set_temperature = cooling_set_temperature
 
         if self.controller_heatpumpmode == "heating":  # and daily_avg_temp < 15:
             if set_temperature > maximum_heating_set_temperature:  # 23
@@ -783,20 +837,26 @@ class GenericHeatPumpController(cp.Component):
                 self.controller_heatpumpmode = "cooling"
                 return
 
-    def smart_conditions(self, set_temperature: float, electricity_input: float) -> None:
+    def smart_conditions(
+        self,
+        set_temperature: float,
+        electricity_input: float,
+        heating_set_temperature: float,
+        cooling_set_temperature: float,
+    ) -> None:
         """Set smart conditions for the heat pump controller mode."""
         smart_offset_upper = 3
         smart_offset_lower = 0.5
-        maximum_heating_set_temperature = self.temperature_set_heating + self.offset
+        maximum_heating_set_temperature = heating_set_temperature + self.offset
         if electricity_input < 0:
             maximum_heating_set_temperature += smart_offset_upper
         # maximum_heating_set_temp = self.t_set_heating
-        minimum_heating_set_temperature = self.temperature_set_heating
+        minimum_heating_set_temperature = heating_set_temperature
         if electricity_input < 0:
             minimum_heating_set_temperature += smart_offset_lower
-        minimum_cooling_set_temperature = self.temperature_set_cooling - self.offset
+        minimum_cooling_set_temperature = cooling_set_temperature - self.offset
         # minimum_cooling_set_temp = self.t_set_cooling
-        maximum_cooling_set_temperature = self.temperature_set_cooling
+        maximum_cooling_set_temperature = cooling_set_temperature
 
         if self.controller_heatpumpmode == "heating":  # and daily_avg_temp < 15:
             if set_temperature > maximum_heating_set_temperature:  # 23

@@ -36,6 +36,8 @@ class L2GenericHeatConfig(cp.ConfigBase):
     source_weight: int
     t_min_heating_in_celsius: float
     t_max_heating_in_celsius: float
+    #: if True, use adaptive comfort band from Building component as control band (for heating/cooling reference temperatures)
+    use_adaptive_comfort_band: bool
     cooling_considered: bool
     t_min_cooling_in_celsius: Optional[float]
     t_max_cooling_in_celsius: Optional[float]
@@ -59,6 +61,7 @@ class L2GenericHeatConfig(cp.ConfigBase):
             source_weight=1,
             t_min_heating_in_celsius=20.0, 
             t_max_heating_in_celsius=22.0, 
+            use_adaptive_comfort_band=False,
             cooling_considered=False,
             t_min_cooling_in_celsius=23,
             t_max_cooling_in_celsius=25,
@@ -79,6 +82,7 @@ class L2GenericHeatConfig(cp.ConfigBase):
             source_weight=1,
             t_min_heating_in_celsius=30.0,
             t_max_heating_in_celsius=50.0,
+            use_adaptive_comfort_band=False,
             cooling_considered=False,
             t_min_cooling_in_celsius=23,
             t_max_cooling_in_celsius=25,
@@ -99,6 +103,7 @@ class L2GenericHeatConfig(cp.ConfigBase):
             source_weight=1,
             t_min_heating_in_celsius=50.0,
             t_max_heating_in_celsius=80.0,
+            use_adaptive_comfort_band=True,
             cooling_considered=False,
             t_min_cooling_in_celsius=None,
             t_max_cooling_in_celsius=None,
@@ -184,6 +189,8 @@ class L2GenericHeatController(cp.Component):
 
     # Inputs
     ReferenceTemperature = "ReferenceTemperature"
+    BuildingComfortLowerBound = "BuildingComfortLowerBound"
+    BuildingComfortUpperBound = "BuildingComfortUpperBound"
 
     # Outputs
     l2_device_signal = "l2_DeviceSignal"
@@ -247,6 +254,22 @@ class L2GenericHeatController(cp.Component):
             mandatory=True,
         )
 
+        self.building_comfort_lower_bound_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.BuildingComfortLowerBound,
+            LoadTypes.TEMPERATURE,
+            Units.CELSIUS,
+            mandatory=False,
+        )
+
+        self.building_comfort_upper_bound_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.BuildingComfortUpperBound,
+            LoadTypes.TEMPERATURE,
+            Units.CELSIUS,
+            mandatory=False,
+        )
+
         self.add_default_connections(self.get_default_connections_from_buildings())
         self.add_default_connections(self.get_default_connections_from_generic_hot_water_storage_modular())
 
@@ -260,6 +283,20 @@ class L2GenericHeatController(cp.Component):
                 L2GenericHeatController.ReferenceTemperature,
                 building_classname,
                 Building.TemperatureMean,
+            )
+        )
+        connections.append(
+            cp.ComponentConnection(
+                L2GenericHeatController.BuildingComfortLowerBound,
+                building_classname,
+                Building.TemperatureComfortLowerBound,
+            )
+        )
+        connections.append(
+            cp.ComponentConnection(
+                L2GenericHeatController.BuildingComfortUpperBound,
+                building_classname,
+                Building.TemperatureComfortUpperBound,
             )
         )
         return connections
@@ -348,6 +385,24 @@ class L2GenericHeatController(cp.Component):
         # check demand, and change state of self.has_heating_demand, and self._has_cooling_demand
         t_control = stsv.get_input_value(self.reference_temperature_channel)
 
+        t_min_heating = self.config.t_min_heating_in_celsius
+        t_max_heating = self.config.t_max_heating_in_celsius
+        t_min_cooling = self.config.t_min_cooling_in_celsius
+        t_max_cooling = self.config.t_max_cooling_in_celsius
+        if (
+            self.config.use_adaptive_comfort_band
+            and self.building_comfort_lower_bound_channel.source_output is not None
+            and self.building_comfort_upper_bound_channel.source_output is not None
+        ):
+            comfort_lower = stsv.get_input_value(self.building_comfort_lower_bound_channel)
+            comfort_upper = stsv.get_input_value(self.building_comfort_upper_bound_channel)
+            if comfort_upper > comfort_lower:
+                # interpret the adaptive comfort band as the desired control band
+                t_min_heating = comfort_lower
+                t_max_heating = comfort_upper
+                t_min_cooling = comfort_lower
+                t_max_cooling = comfort_upper
+
         # check if it is the first iteration and reset compulsory and timestep_of_last_activation in state and previous_state
         if self.state.is_first_iteration(timestep):
             self.previous_state.is_first_iteration(timestep)
@@ -356,23 +411,23 @@ class L2GenericHeatController(cp.Component):
             if self.heating_season_begin > timestep > self.heating_season_end:
                 self.control_cooling(
                     t_control=t_control,
-                    t_min_cooling=self.config.t_min_cooling_in_celsius,
-                    t_max_cooling=self.config.t_max_cooling_in_celsius,
+                    t_min_cooling=t_min_cooling,
+                    t_max_cooling=t_max_cooling,
                 )
             # check out during heating season
             else:
                 self.control_heating(
                     t_control=t_control,
-                    t_min_heating=self.config.t_min_heating_in_celsius,
-                    t_max_heating=self.config.t_max_heating_in_celsius,
+                    t_min_heating=t_min_heating,
+                    t_max_heating=t_max_heating,
                 )
 
         # check out during heating season
         else:
             self.control_heating(
                 t_control=t_control,
-                t_min_heating=self.config.t_min_heating_in_celsius,
-                t_max_heating=self.config.t_max_heating_in_celsius,
+                t_min_heating=t_min_heating,
+                t_max_heating=t_max_heating,
             )
         stsv.set_output_value(self.l2_device_signal_channel, self.state.state)
 

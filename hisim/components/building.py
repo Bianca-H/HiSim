@@ -730,6 +730,7 @@ class Building(cp.Component):
     GlobalHorizontalIrradiance = "GlobalHorizontalIrradiance"
     TemperatureOutside = "TemperatureOutside"
     RunningAverageOutsideTemperature24h = "RunningAverageOutsideTemperature24h"
+    RunningAverageOutsideTemperature48h = "RunningAverageOutsideTemperature48h"
 
     # Inputs -> energy management system
     BuildingTemperatureModifier = "BuildingTemperatureModifier"
@@ -891,6 +892,13 @@ class Building(cp.Component):
         self.running_average_outside_temperature_24h_channel: cp.ComponentInput = self.add_input(
             self.component_name,
             self.RunningAverageOutsideTemperature24h,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            False,
+        )
+        self.running_average_outside_temperature_48h_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.RunningAverageOutsideTemperature48h,
             lt.LoadTypes.TEMPERATURE,
             lt.Units.CELSIUS,
             False,
@@ -1186,6 +1194,13 @@ class Building(cp.Component):
                 Weather.RunningAverageOutsideTemperature24h,
             )
         )
+        connections.append(
+            cp.ComponentConnection(
+                Building.RunningAverageOutsideTemperature48h,
+                weather_classname,
+                Weather.RunningAverageOutsideTemperature48h,
+            )
+        )
 
         return connections
 
@@ -1292,11 +1307,16 @@ class Building(cp.Component):
 
         temperature_outside_in_celsius = stsv.get_input_value(self.temperature_outside_channel)
 
-        running_average_outside_temperature_in_celsius = stsv.get_input_value(
-            self.running_average_outside_temperature_24h_channel
-        )
-        if self.running_average_outside_temperature_24h_channel.source_output is None:
-            running_average_outside_temperature_in_celsius = temperature_outside_in_celsius
+        # Adaptive comfort: use running-average outdoor air temperature (48h preferred).
+        running_average_outside_temperature_in_celsius = temperature_outside_in_celsius
+        if self.running_average_outside_temperature_48h_channel.source_output is not None:
+            candidate = stsv.get_input_value(self.running_average_outside_temperature_48h_channel)
+            if abs(candidate) > 1e-6 or abs(temperature_outside_in_celsius) < 1e-6:
+                running_average_outside_temperature_in_celsius = candidate
+        elif self.running_average_outside_temperature_24h_channel.source_output is not None:
+            candidate = stsv.get_input_value(self.running_average_outside_temperature_24h_channel)
+            if abs(candidate) > 1e-6 or abs(temperature_outside_in_celsius) < 1e-6:
+                running_average_outside_temperature_in_celsius = candidate
 
         building_temperature_modifier = stsv.get_input_value(self.building_temperature_modifier_channel)
 
@@ -1433,7 +1453,7 @@ class Building(cp.Component):
             (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2,
         )
         operative_temperature_in_celsius = (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2
-        # Comfort temperature band dependent on 24h running average outdoor air temperature.
+        # Comfort temperature band dependent on 48h running average outdoor air temperature.
         # Lower bound:
         #   x <= 19°C  -> 20.5°C
         #   19..23°C   -> linearly to 22.0°C
