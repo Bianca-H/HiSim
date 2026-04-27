@@ -424,6 +424,8 @@ class WeatherConfig(ConfigBase):
     predictive_control: bool
     latitude: float | None = None
     longitude: float | None = None
+    #: Location-specific shading factor in [0,1]. Higher means more shading -> less solar irradiance.
+    shading_factor: float = 0.0
 
     @classmethod
     def get_main_classname(cls):
@@ -461,6 +463,24 @@ class WeatherConfig(ConfigBase):
         if len(location_entry.value) >= 7:
             latitude = float(location_entry.value[5])
             longitude = float(location_entry.value[6])
+
+        # Optional location-specific shading factor (0..1) loaded from inputs.
+        shading_factor = 0.0
+        try:
+            shading_df = pd.read_csv(utils.HISIMPATH["weather_shading_factors"], comment="#")
+            if "weather_location" in shading_df.columns and "shading_factor" in shading_df.columns:
+                key = str(location_entry.name).strip().upper()
+                shading_df["weather_location"] = shading_df["weather_location"].astype(str).str.strip().str.upper()
+                match = shading_df.loc[shading_df["weather_location"] == key, "shading_factor"]
+                if not match.empty:
+                    shading_factor = float(match.iloc[0])
+        except Exception:
+            shading_factor = 0.0
+        # Clamp
+        if shading_factor < 0.0:
+            shading_factor = 0.0
+        if shading_factor > 1.0:
+            shading_factor = 1.0
         config = WeatherConfig(
             building_name=building_name,
             name=name,
@@ -470,6 +490,7 @@ class WeatherConfig(ConfigBase):
             predictive_control=False,
             latitude=latitude,
             longitude=longitude,
+            shading_factor=shading_factor,
         )
         return config
 

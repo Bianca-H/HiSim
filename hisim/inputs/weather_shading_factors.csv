@@ -1,0 +1,7 @@
+weather_location,shading_factor
+# Use LocationEnum member names like ZUESTA/BASSTA/KLO/RUE/AACHEN/... (case-insensitive).
+# shading_factor in [0,1]. 0 = no shading, 1 = fully shaded (no solar irradiance).
+ZUESTA,0.7485
+BASSTA,0.6491
+KLO,0.5152
+RUE,0.3865

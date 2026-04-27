@@ -1,0 +1,313 @@
+"""Helpers for sizing and selecting heating systems.
+
+This module provides:
+- opt-in "ideal size lookup" (per ARCH×WEATHER/location) from a JSON table
+- discrete product selection for heat pumps (from the smart devices database)
+
+Setups can decide whether to use the default sizing logic or this lookup-based sizing.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from hisim import utils
+
+
+@dataclass(frozen=True)
+class HeatPumpProduct:
+    """Discrete heat pump product from the smart devices database."""
+
+    manufacturer: str
+    name: str
+    nominal_heating_power_in_watt: float
+
+
+DEFAULT_IDEAL_SIZES_PATH = Path(utils.HISIMPATH["inputs"]) / "heating_system_ideal_sizes.json"
+
+
+def load_ideal_sizes(path: Optional[Path] = None) -> Dict[str, Dict[str, float]]:
+    """Load ideal sizes from JSON.
+
+    Expected JSON format:
+    {
+      "unit": "kW",
+      "data": {
+        "01_CH": { "ZUESTA": 7.0, "BASSTA": 6.5, ... },
+        "02_CH": { ... }
+      }
+    }
+
+    Returns:
+        Mapping arch -> mapping weather/location -> ideal_power_in_watt
+    """
+
+    path = path or DEFAULT_IDEAL_SIZES_PATH
+    with path.open("r", encoding="utf-8") as fp:
+        raw = json.load(fp)
+    unit = str(raw.get("unit") or "kW").strip()
+    data = raw.get("data")
+    if not isinstance(data, dict):
+        raise ValueError(f"Ideal sizes file {path} is missing top-level 'data' dict.")
+
+    out: Dict[str, Dict[str, float]] = {}
+    for arch, by_loc in data.items():
+        if not isinstance(by_loc, dict):
+            continue
+        arch_key = str(arch).strip()
+        out[arch_key] = {}
+        for loc, val in by_loc.items():
+            fval = _as_float(val)
+            if fval is None:
+                continue
+            loc_key = str(loc).strip()
+            if unit.lower() == "kw":
+                out[arch_key][loc_key] = fval * 1e3
+            elif unit.lower() in ("w", "watt", "watts"):
+                out[arch_key][loc_key] = fval
+            else:
+                raise ValueError(f"Unsupported unit '{unit}' in ideal sizes file {path}. Use 'kW' or 'W'.")
+    return out
+
+
+def get_ideal_power_from_lookup(*, arch: str, weather: str, path: Optional[Path] = None) -> float:
+    """Get the ideal heat generator power (W) for a given ARCH×WEATHER."""
+
+    sizes = load_ideal_sizes(path)
+    if arch not in sizes or weather not in sizes[arch]:
+        available_arch = ", ".join(sorted(sizes.keys()))
+        available_weather = ", ".join(sorted(sizes.get(arch, {}).keys()))
+        raise KeyError(
+            "No ideal size found for "
+            f"ARCH={arch} WEATHER={weather}. "
+            f"Available ARCH in file: [{available_arch}]. "
+            f"Available WEATHER for ARCH={arch}: [{available_weather}]."
+        )
+    power_w = float(sizes[arch][weather])
+    if power_w <= 0:
+        raise ValueError(
+            f"Ideal size for ARCH={arch} WEATHER={weather} must be > 0, got {power_w}. "
+            f"Please fill `{(path or DEFAULT_IDEAL_SIZES_PATH)}` with real values."
+        )
+    return power_w
+
+
+def _as_float(value: object) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        # common "range" format in database, e.g. "2.9-4.4" -> use first number
+        if isinstance(value, str) and "-" in value:
+            maybe = value.split("-", 1)[0].strip()
+            return float(maybe)
+        # sometimes values are lists like [] or [3.5]
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return None
+            return _as_float(value[0])
+        return float(value)
+    except Exception:
+        return None
+
+
+def _has_usable_cop_curve(hp: dict) -> bool:
+    """Return True if the product has at least 2 numeric COP points."""
+
+    cop = hp.get("COP")
+    if not isinstance(cop, list):
+        return False
+    numeric_points = 0
+    for entry in cop:
+        if not isinstance(entry, dict) or not entry:
+            continue
+        val = list(entry.values())[0]
+        if _as_float(val) is not None:
+            numeric_points += 1
+        if numeric_points >= 2:
+            return True
+    return False
+
+
+def load_heat_pump_products() -> List[HeatPumpProduct]:
+    """Load all heat pump products that have nominal heating power and usable COP data."""
+
+    raw = utils.load_smart_appliance("Heat Pump")
+    products: List[HeatPumpProduct] = []
+    for hp in raw:
+        manufacturer = str(hp.get("Manufacturer", "")).strip()
+        name = str(hp.get("Name", "")).strip()
+        power_kw = _as_float(hp.get("Nominal Heating Power A2/35"))
+        if not manufacturer or not name or power_kw is None:
+            continue
+        # Avoid selecting products that cannot be simulated because COP data is missing/empty.
+        if not _has_usable_cop_curve(hp):
+            continue
+        products.append(
+            HeatPumpProduct(
+                manufacturer=manufacturer,
+                name=name,
+                nominal_heating_power_in_watt=power_kw * 1e3,
+            )
+        )
+    return products
+
+
+def pick_closest_by_nominal_power(
+    *,
+    ideal_power_in_watt: float,
+    candidates: Iterable[Tuple[str, float]],
+    prefer_smaller_on_tie: bool = True,
+) -> str:
+    """Pick candidate with nominal power closest to ideal.
+
+    Args:
+        ideal_power_in_watt: Target size.
+        candidates: Iterable of (id, nominal_power_in_watt).
+        prefer_smaller_on_tie: If same absolute distance, prefer the smaller unit.
+
+    Returns:
+        The candidate id.
+    """
+
+    best_id: Optional[str] = None
+    best_dist: Optional[float] = None
+    best_power: Optional[float] = None
+
+    for cid, power in candidates:
+        dist = abs(float(power) - float(ideal_power_in_watt))
+        if best_id is None:
+            best_id, best_dist, best_power = str(cid), dist, float(power)
+            continue
+        assert best_dist is not None
+        assert best_power is not None
+        if dist < best_dist:
+            best_id, best_dist, best_power = str(cid), dist, float(power)
+        elif dist == best_dist:
+            if prefer_smaller_on_tie and float(power) < best_power:
+                best_id, best_dist, best_power = str(cid), dist, float(power)
+            elif (not prefer_smaller_on_tie) and float(power) > best_power:
+                best_id, best_dist, best_power = str(cid), dist, float(power)
+
+    if best_id is None:
+        raise ValueError("No candidates provided.")
+    return best_id
+
+
+def pick_size_up_with_small_down_tolerance(
+    *,
+    ideal_power_in_watt: float,
+    candidates: Iterable[Tuple[str, float]],
+    downsize_tolerance_in_watt: float = 100.0,
+) -> str:
+    """Pick a discrete unit by sizing up, with a small allowed downsize tolerance.
+
+    Selection logic:
+    - Prefer the smallest candidate with power >= ideal (size up).
+    - Only pick the largest candidate below ideal (size down) if it is within
+      `downsize_tolerance_in_watt` of the ideal.
+    - If there is no size-up candidate, pick the largest below ideal.
+    """
+
+    ideal = float(ideal_power_in_watt)
+    down_tol = float(downsize_tolerance_in_watt)
+
+    up_id: Optional[str] = None
+    up_power: Optional[float] = None
+    down_id: Optional[str] = None
+    down_power: Optional[float] = None
+
+    for cid, power_raw in candidates:
+        power = float(power_raw)
+        if power >= ideal:
+            if up_power is None or power < up_power:
+                up_power = power
+                up_id = str(cid)
+        else:
+            if down_power is None or power > down_power:
+                down_power = power
+                down_id = str(cid)
+
+    if up_id is None and down_id is None:
+        raise ValueError("No candidates provided.")
+
+    # Downsize only if very close to ideal.
+    if down_id is not None and down_power is not None:
+        if (ideal - down_power) < down_tol:
+            return down_id
+
+    # Otherwise size up if possible, else fall back to largest smaller.
+    if up_id is not None:
+        return up_id
+    assert down_id is not None
+    return down_id
+
+
+def pick_always_size_up_with_extra_if_close(
+    *,
+    ideal_power_in_watt: float,
+    candidates: Iterable[Tuple[str, float]],
+    extra_upsizing_if_within_watt: float = 100.0,
+) -> str:
+    """Pick a discrete unit by always sizing up.
+
+    Selection logic:
+    - Pick the smallest candidate with power >= ideal (size up).
+    - If that chosen unit is within `extra_upsizing_if_within_watt` above the ideal,
+      pick the next larger unit (one more size up), if available.
+    - If there is no size-up candidate, pick the largest available candidate.
+    """
+
+    ideal = float(ideal_power_in_watt)
+    close_w = float(extra_upsizing_if_within_watt)
+
+    ordered: List[Tuple[float, str]] = []
+    for cid, power_raw in candidates:
+        ordered.append((float(power_raw), str(cid)))
+    if not ordered:
+        raise ValueError("No candidates provided.")
+    ordered.sort(key=lambda x: x[0])
+
+    up_index: Optional[int] = None
+    for idx, (pwr, _) in enumerate(ordered):
+        if pwr >= ideal:
+            up_index = idx
+            break
+
+    if up_index is None:
+        return ordered[-1][1]
+
+    chosen_power, chosen_id = ordered[up_index]
+    if (chosen_power - ideal) < close_w and (up_index + 1) < len(ordered):
+        return ordered[up_index + 1][1]
+    return chosen_id
+
+
+def pick_heat_pump_closest_to_ideal(
+    *,
+    ideal_power_in_watt: float,
+    products: Optional[List[HeatPumpProduct]] = None,
+) -> HeatPumpProduct:
+    """Pick a heat pump product for an ideal size.
+
+    Always sizes up. If the first size-up is within 100 W above ideal, it picks
+    one additional size step larger (if available).
+    """
+
+    products = products or load_heat_pump_products()
+    if not products:
+        raise ValueError("No heat pump products available in database.")
+
+    chosen_key = pick_always_size_up_with_extra_if_close(
+        ideal_power_in_watt=ideal_power_in_watt,
+        candidates=[(f"{p.manufacturer}::{p.name}", p.nominal_heating_power_in_watt) for p in products],
+        extra_upsizing_if_within_watt=100.0,
+    )
+    manufacturer, name = chosen_key.split("::", 1)
+    for p in products:
+        if p.manufacturer == manufacturer and p.name == name:
+            return p
+    raise RuntimeError("Chosen heat pump product not found after selection.")
+

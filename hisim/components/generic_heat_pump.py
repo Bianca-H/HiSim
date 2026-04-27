@@ -366,9 +366,34 @@ class GenericHeatPump(cp.Component):
         # Interpolates COP data from the database
         self.cop_ref = []
         self.temperature_outside_ref = []
-        for heat_pump_cops in heat_pump["COP"]:
-            self.temperature_outside_ref.append(float([*heat_pump_cops][0][1:].split("/")[0]))
-            self.cop_ref.append(float([*heat_pump_cops.values()][0]))
+        for heat_pump_cops in heat_pump.get("COP", []):
+            if not isinstance(heat_pump_cops, dict) or not heat_pump_cops:
+                continue
+            key = [*heat_pump_cops][0]
+            raw_val = [*heat_pump_cops.values()][0]
+            try:
+                t_out = float(str(key)[1:].split("/")[0])
+            except Exception:
+                continue
+            # Some database entries store COP as list (or empty list). Try to extract a scalar.
+            cop_val: float | None = None
+            try:
+                if isinstance(raw_val, (list, tuple)):
+                    if raw_val:
+                        cop_val = float(raw_val[0])
+                else:
+                    cop_val = float(raw_val)
+            except Exception:
+                cop_val = None
+            if cop_val is None:
+                continue
+            self.temperature_outside_ref.append(t_out)
+            self.cop_ref.append(cop_val)
+        if len(self.cop_ref) < 2:
+            raise ValueError(
+                f"Heat pump model '{manufacturer} / {name}' has no usable COP curve in smart_devices.json. "
+                "Please choose another model or fix the database entry."
+            )
         self.cop_coef = np.polyfit(self.temperature_outside_ref, self.cop_ref, 1)
 
         self.max_heating_power_in_watt = heat_pump["Nominal Heating Power A2/35"] * 1e3

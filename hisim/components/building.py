@@ -54,6 +54,7 @@ from dataclasses_json import dataclass_json
 from hisim import component as cp
 from hisim import loadtypes as lt
 from hisim import log, utils
+from hisim import cli_overrides
 from hisim.components.loadprofilegenerator_utsp_connector import UtspLpgConnector
 from hisim.components.weather import Weather
 from hisim.loadtypes import OutputPostprocessingRules
@@ -806,6 +807,10 @@ class Building(cp.Component):
             config=self.buildingconfig,
         )
 
+        # Optional: location-specific facade/window shading factor (does NOT affect PV).
+        # Loaded once so we can apply it to solar gains through windows.
+        self.location_shading_factor: float = self._load_location_shading_factor()
+
         self.build()
 
         self.state: BuildingState = BuildingState(
@@ -1123,6 +1128,48 @@ class Building(cp.Component):
         self.add_default_connections(self.get_default_connections_from_hds())
         self.add_default_connections(self.get_default_connections_from_electric_heater())
         self.add_default_connections(self.get_default_connections_from_energy_management_system())
+
+    def _load_location_shading_factor(self) -> float:
+        """Load shading factor in [0,1] for the current weather location.
+
+        Uses (in order):
+        - CLI override/used value `WEATHER` (e.g., ZUESTA)
+        - SingletonSimRepository LOCATION entry (e.g., "Zurich")
+        """
+
+        try:
+            shading_df = pd.read_csv(utils.HISIMPATH["weather_shading_factors"], comment="#")
+        except Exception:
+            return 0.0
+        if "weather_location" not in shading_df.columns or "shading_factor" not in shading_df.columns:
+            return 0.0
+
+        shading_df["weather_location"] = shading_df["weather_location"].astype(str).str.strip().str.upper()
+        try:
+            shading_df["shading_factor"] = shading_df["shading_factor"].astype(float)
+        except Exception:
+            return 0.0
+
+        # Candidate keys
+        key_cli = (cli_overrides.get_used_value("WEATHER") or cli_overrides.get_override("WEATHER") or "").strip().upper()
+        key_repo = ""
+        try:
+            key_repo = str(SingletonSimRepository().get_entry(SingletonDictKeyEnum.LOCATION) or "").strip().upper()
+        except Exception:
+            key_repo = ""
+
+        for key in [key_cli, key_repo]:
+            if not key:
+                continue
+            match = shading_df.loc[shading_df["weather_location"] == key, "shading_factor"]
+            if not match.empty:
+                val = float(match.iloc[0])
+                if val < 0.0:
+                    return 0.0
+                if val > 1.0:
+                    return 1.0
+                return val
+        return 0.0
 
     def get_default_connections_from_weather(
         self,
@@ -2381,6 +2428,18 @@ class Building(cp.Component):
 
         Based on the RC_BuildingSimulator project @[rc_buildingsimulator-jayathissa] (** Check header)
         """
+        # Apply optional location shading factor only to building solar gains (not PV).
+        shading = float(getattr(self, "location_shading_factor", 0.0) or 0.0)
+        if shading < 0.0:
+            shading = 0.0
+        if shading > 1.0:
+            shading = 1.0
+        trans = 1.0 - shading
+
+        direct_normal_irradiance *= trans
+        direct_horizontal_irradiance *= trans
+        global_horizontal_irradiance *= trans
+
         solar_heat_gains = 0.0
 
         if direct_normal_irradiance != 0 or direct_horizontal_irradiance != 0 or global_horizontal_irradiance != 0:

@@ -13,6 +13,8 @@ import pandas as pd
 from utspclient.helpers.lpgpythonbindings import JsonReference
 
 import hisim.loadtypes as lt
+from hisim import cli_overrides
+from hisim import heating_system_selection
 from hisim import utils
 from hisim.component import Component
 from hisim.components import (
@@ -697,8 +699,19 @@ def configure_heating(
         heating_system_installed.value
     )
 
-    # set power of heating system according to maximal power demand
-    heater_config.power_th = my_building.my_building_information.max_thermal_building_demand_in_watt
+    # set power of heating system (default: peak load, optional: ideal size lookup)
+    sizing_mode = (cli_overrides.get_override("HEATGEN_SIZING") or "").strip().upper()
+    if sizing_mode == "IDEAL_LOOKUP":
+        arch = (cli_overrides.get_used_value("ARCH") or cli_overrides.get_override("ARCH") or "").strip()
+        weather_val = (cli_overrides.get_used_value("WEATHER") or cli_overrides.get_override("WEATHER") or "").strip()
+        if not arch or not weather_val:
+            raise ValueError(
+                "HEATGEN_SIZING=IDEAL_LOOKUP requires ARCH and WEATHER to be set "
+                "(e.g., ARCH=01_CH WEATHER=ZUESTA)."
+            )
+        heater_config.power_th = heating_system_selection.get_ideal_power_from_lookup(arch=arch, weather=weather_val)
+    else:
+        heater_config.power_th = my_building.my_building_information.max_thermal_building_demand_in_watt
     heater_l1_config.day_of_heating_season_end = heating_season[0]
     heater_l1_config.day_of_heating_season_begin = heating_season[1]
 
@@ -778,7 +791,20 @@ def configure_heating_electric(
             "ElectricHeatingController"
         )
 
-    heatpump_config.power_th = my_building.my_building_information.max_thermal_building_demand_in_watt * heatpump_power
+    # set power of heating system (default: peak load, optional: ideal size lookup)
+    sizing_mode = (cli_overrides.get_override("HEATGEN_SIZING") or "").strip().upper()
+    if sizing_mode == "IDEAL_LOOKUP":
+        arch = (cli_overrides.get_used_value("ARCH") or cli_overrides.get_override("ARCH") or "").strip()
+        weather_val = (cli_overrides.get_used_value("WEATHER") or cli_overrides.get_override("WEATHER") or "").strip()
+        if not arch or not weather_val:
+            raise ValueError(
+                "HEATGEN_SIZING=IDEAL_LOOKUP requires ARCH and WEATHER to be set "
+                "(e.g., ARCH=01_CH WEATHER=ZUESTA)."
+            )
+        ideal_w = heating_system_selection.get_ideal_power_from_lookup(arch=arch, weather=weather_val)
+        heatpump_config.power_th = ideal_w * heatpump_power
+    else:
+        heatpump_config.power_th = my_building.my_building_information.max_thermal_building_demand_in_watt * heatpump_power
     heatpump_l1_config.day_of_heating_season_end = heating_season[0]
     heatpump_l1_config.day_of_heating_season_begin = heating_season[1]
     [heatpump_config.source_weight, heatpump_l1_config.source_weight] = [count] * 2

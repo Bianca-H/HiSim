@@ -53,17 +53,28 @@ def _iter_matrix_runs(
     setup: str,
     arch_values: Iterable[str],
     weather_values: Iterable[str],
+    extra_overrides: Optional[dict[str, Any]] = None,
 ) -> List[tuple[str, List[str]]]:
     runs: List[tuple[str, List[str]]] = []
+    extra_overrides = extra_overrides or {}
+    override_args: List[str] = []
+    for k, v in extra_overrides.items():
+        key = str(k).strip().upper()
+        if not key:
+            continue
+        override_args.append(f"{key}={str(v).strip()}")
     for arch in arch_values:
         for weather in weather_values:
             name = f"{setup} ARCH={arch} WEATHER={weather}"
+            if override_args:
+                name += " " + " ".join(override_args)
             cmd = [
                 sys.executable,
                 str(hisim_main),
                 setup,
                 f"ARCH={arch}",
                 f"WEATHER={weather}",
+                *override_args,
             ]
             runs.append((name, cmd))
     return runs
@@ -159,9 +170,18 @@ def _runs_from_config(cfg: dict, hisim_main: Path) -> List[tuple[str, List[str]]
         setup = str(cfg["setup"])
         arch_values = cfg.get("arch") or []
         weather_values = cfg.get("weather") or []
+        extra_overrides = cfg.get("overrides") or {}
         if not arch_values or not weather_values:
             raise ValueError("Matrix mode needs non-empty `arch` and `weather` lists.")
-        return _iter_matrix_runs(hisim_main=hisim_main, setup=setup, arch_values=arch_values, weather_values=weather_values)
+        if extra_overrides is not None and not isinstance(extra_overrides, dict):
+            raise TypeError("Matrix mode `overrides` must be a JSON object (dict).")
+        return _iter_matrix_runs(
+            hisim_main=hisim_main,
+            setup=setup,
+            arch_values=arch_values,
+            weather_values=weather_values,
+            extra_overrides=extra_overrides,
+        )
     if mode == "commands":
         commands = cfg.get("commands") or []
         if not commands:

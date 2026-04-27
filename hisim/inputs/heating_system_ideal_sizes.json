@@ -1,0 +1,60 @@
+{
+  "unit": "kW",
+  "data": {
+    "01_CH": {
+      "ZUESTA": 8.3,
+      "BASSTA": 9.03,
+      "KLO": 8.3,
+      "RUE": 9.18
+    },
+    "02_CH": {
+      "ZUESTA": 7.51,
+      "BASSTA": 8.16,
+      "KLO": 7.51,
+      "RUE": 8.3
+    },
+    "03_CH": {
+      "ZUESTA": 7.02,
+      "BASSTA": 7.62,
+      "KLO": 7.02,
+      "RUE": 7.75
+    },
+    "04_CH": {
+      "ZUESTA": 7.33,
+      "BASSTA": 7.97,
+      "KLO": 7.33,
+      "RUE": 8.1
+    },
+    "05_CH": {
+      "ZUESTA": 6.75,
+      "BASSTA": 7.35,
+      "KLO": 6.75,
+      "RUE": 7.47
+    },
+    "06_CH": {
+      "ZUESTA": 5.07,
+      "BASSTA": 5.55,
+      "KLO": 5.07,
+      "RUE": 5.62
+    },
+    "07_CH": {
+      "ZUESTA": 4.73,
+      "BASSTA": 5.18,
+      "KLO": 4.73,
+      "RUE": 5.24
+    },
+    "08_CH": {
+      "ZUESTA": 4.1,
+      "BASSTA": 4.5,
+      "KLO": 4.1,
+      "RUE": 4.55
+    },
+    "09_CH": {
+      "ZUESTA": 2.63,
+      "BASSTA": 2.93,
+      "KLO": 2.63,
+      "RUE": 2.94
+    }
+  }
+}
+

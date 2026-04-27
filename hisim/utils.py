@@ -57,6 +57,7 @@ HISIMPATH: Dict[str, Any] = {
         "data_processed",
         "heating_reference_temperature_per_location.csv",
     ),
+    "weather_shading_factors": os.path.join(hisim_inputs, "weather_shading_factors.csv"),
     "heater_efficiencies": os.path.join(
         hisim_inputs,
         "housing",

@@ -88,7 +88,7 @@
               "COP":[
                     {"A-7/W35":3.38},
                     {"A-2/W35":3.88},
-                    {"A7/W35":[]},
+                    {"A7/W35":4.91},
                     {"A10/W35":5.49}
               ],
               "Heating Power A-7/35":[],
@@ -168,6 +168,76 @@
               "Price":"11489.00 EUR"
             },
             {
+              "Manufacturer":"Viessmann Werke GmbH & Co KG",
+              "Name":"Vitocal 250-A Compact AWMOF-251.A1.06-400-V001/V002",
+              "Source":"Air",
+              "COP":[
+                    {"A-7/W35":3.0},
+                    {"A-2/W35":3.3},
+                    {"A7/W35":5.1},
+                    {"A10/W35":5.47}
+              ],
+              "Heating Power A-7/35":5.6,
+              "Nominal Heating Power A2/35":3.1,
+              "Price":"11489.00 EUR"
+            },
+            {
+              "Manufacturer":"Viessmann Werke GmbH & Co KG",
+              "Name":"Vitocal 250-A Compact AWMOF-251.A1.13-400-V001/V002",
+              "Source":"Air",
+              "COP":[
+                    {"A-7/W35":2.97},
+                    {"A-2/W35":3.3},
+                    {"A7/W35":5.39},
+                    {"A10/W35":5.6}
+              ],
+              "Heating Power A-7/35":11.1,
+              "Nominal Heating Power A2/35":6.7,
+              "Price":"11489.00 EUR"
+            },
+            {
+              "Manufacturer":"Viessmann Werke GmbH & Co KG",
+              "Name":"Vitocal 250-A Compact AWMOF-251.A1.16-400-V001/V002",
+              "Source":"Air",
+              "COP":[
+                    {"A-7/W35":2.95},
+                    {"A-2/W35":3.3},
+                    {"A7/W35":5.31},
+                    {"A10/W35":5.6}
+              ],
+              "Heating Power A-7/35":11.7,
+              "Nominal Heating Power A2/35":7.6,
+              "Price":"11489.00 EUR"
+            },
+            {
+              "Manufacturer":"Viessmann Werke GmbH & Co KG",
+              "Name":"Vitocal 250-A Compact AWMOF-251.A1.19-400-V001/V002",
+              "Source":"Air",
+              "COP":[
+                    {"A-7/W35":2.87},
+                    {"A-2/W35":3.2},
+                    {"A7/W35":5.27},
+                    {"A10/W35":5.6}
+              ],
+              "Heating Power A-7/35":12.3,
+              "Nominal Heating Power A2/35":8.6,
+              "Price":"11489.00 EUR"
+            },
+            {
+              "Manufacturer":"Viessmann Werke GmbH & Co KG",
+              "Name":"Vitocal 300-G 201.B10",
+              "Source":"Ground",
+              "COP":[
+                    {"A-7/W35":4.2},
+                    {"A-2/W35":4.5},
+                    {"A7/W35":4.84},
+                    {"A10/W35":5.1}
+              ],
+              "Heating Power A-7/35":12,
+              "Nominal Heating Power A2/35":10.39,
+              "Price":"11489.00 EUR"
+            },
+            {
               "Manufacturer":"NIBE Systemtechnick GmbH",
               "Name":"F750",
               "Source":"Ground",
@@ -192,7 +262,7 @@
               "Price":"12435.29 EUR"
             },
             {
-              "Manufacturer":"VAillant Deutschland GmbH & Co. KG",
+              "Manufacturer":"Vaillant Deutschland GmbH & Co. KG",
               "Name":"flexoTHERM exclusive VWF 58/4",
               "Source":"Air",
               "COP":[

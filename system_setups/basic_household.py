@@ -14,6 +14,7 @@ from hisim.components import sia2024_occupancy
 from hisim import loadtypes
 from hisim import cli_overrides
 from hisim import log
+from hisim import heating_system_selection
 
 
 __authors__ = "Vitor Hugo Bellotto Zago, Noah Pflugradt"
@@ -79,13 +80,53 @@ def setup_function(
     my_sim.set_simulation_parameters(my_simulation_parameters)
     print(my_simulation_parameters.post_processing_options)
 
+    # -----------------------------
+    # Determine ARCH / WEATHER used
+    # -----------------------------
+    arch_override = cli_overrides.get_override("ARCH")
+    arch_used = arch_override if arch_override is not None else default_arch
+
+    weather_override = cli_overrides.get_override("WEATHER")
+    weather_used = weather_override if weather_override is not None else default_weather
+
+    # Record used values for batch runners / reporting
+    cli_overrides.set_used_value("ARCH", arch_used)
+    cli_overrides.set_used_value("WEATHER", weather_used)
+
+    # -----------------------------
+    # Build Weather (needed for sizing assumptions)
+    # -----------------------------
+    my_weather_config = weather.WeatherConfig.get_default(
+        location_entry=getattr(weather.LocationEnum, default_weather)
+    )
+    if weather_override is not None:
+        try:
+            my_weather_config = cli_overrides.apply_weather_location_override(
+                weather_module=weather,
+                weather_value=weather_override,
+                name="Weather",
+                building_name="BUI1",
+            )
+            log.information(f"Applied CLI override WEATHER={weather_override} to weather configuration.")
+        except Exception:
+            log.warning(
+                f"CLI override WEATHER={weather_override} was provided, but no matching "
+                f"`LocationEnum.{weather_override}` exists in `hisim.components.weather`. Using default weather config."
+            )
+            my_weather_config = weather.WeatherConfig.get_default(
+                location_entry=getattr(weather.LocationEnum, default_weather)
+            )
+            weather_used = default_weather
+            cli_overrides.set_used_value("WEATHER", weather_used)
+    my_weather = weather.Weather(config=my_weather_config, my_simulation_parameters=my_simulation_parameters)
+
+    # -----------------------------
     # Build Building
+    # -----------------------------
     my_building_config = cli_overrides.apply_building_archetype_override(
         building_module=building,
         arch_value=default_arch,
     )
-    arch_override = cli_overrides.get_override("ARCH")
-    arch_used = default_arch
     if arch_override is not None:
         try:
             my_building_config = cli_overrides.apply_building_archetype_override(
@@ -93,7 +134,6 @@ def setup_function(
                 arch_value=arch_override,
             )
             log.information(f"Applied CLI override ARCH={arch_override} to building configuration.")
-            arch_used = arch_override
         except Exception:
             log.warning(
                 f"CLI override ARCH={arch_override} was provided, but no matching "
@@ -104,10 +144,23 @@ def setup_function(
                 arch_value=default_arch,
             )
             arch_used = default_arch
+            cli_overrides.set_used_value("ARCH", arch_used)
     #my_building_config = building.BuildingConfig.get_default_german_single_family_home()
-    cli_overrides.set_used_value("ARCH", arch_used)
+
+    # Use a location-dependent design temperature (heating reference temperature) if available.
+    # The `LocationEnum` names in the batch matrix (ZUESTA/BASSTA/KLO/RUE) are Swiss custom CSVs.
+    # For now we map them to typical Swiss design temperatures (°C). Users can refine these later.
+    weather_to_ref_temp_c = {
+        "ZUESTA": -8.0,   # Zurich
+        "BASSTA": -7.0,   # Basel
+        "KLO": -9.0,      # Kloten (airport, slightly colder)
+        "RUE": -10.0,     # Ruenenberg (higher/colder)
+    }
+    if weather_used in weather_to_ref_temp_c:
+        my_building_config.heating_reference_temperature_in_celsius = weather_to_ref_temp_c[weather_used]
 
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
+
     # Build Occupancy (choice: LPG/UTSP default, or SIA2024)
     occ_mode = "SIA2024" #(cli_overrides.get_override("OCC") or "LPG").strip().upper()
     if occ_mode == "SIA2024":
@@ -132,34 +185,6 @@ def setup_function(
             config=my_occupancy_config, my_simulation_parameters=my_simulation_parameters
         )
         log.information("Using LPG/UTSP schedules (default). Set OCC=SIA2024 to switch.")
-
-    # Build Weather
-    my_weather_config = weather.WeatherConfig.get_default(
-        location_entry=getattr(weather.LocationEnum, default_weather)
-    ) #choose Weather location here AACHEN
-    weather_override = cli_overrides.get_override("WEATHER")
-    weather_used = default_weather
-    if weather_override is not None:
-        try:
-            my_weather_config = cli_overrides.apply_weather_location_override(
-                weather_module=weather,
-                weather_value=weather_override,
-                name="Weather",
-                building_name="BUI1",
-            )
-            log.information(f"Applied CLI override WEATHER={weather_override} to weather configuration.")
-            weather_used = weather_override
-        except Exception:
-            log.warning(
-                f"CLI override WEATHER={weather_override} was provided, but no matching "
-                f"`LocationEnum.{weather_override}` exists in `hisim.components.weather`. Using default weather config."
-            )
-            my_weather_config = weather.WeatherConfig.get_default(
-                location_entry=getattr(weather.LocationEnum, default_weather)
-            )
-            weather_used = default_weather
-    cli_overrides.set_used_value("WEATHER", weather_used)
-    my_weather = weather.Weather(config=my_weather_config, my_simulation_parameters=my_simulation_parameters)
 
     # Build PV
     my_photovoltaic_system_config = generic_pv_system.PVSystemConfig.get_default_pv_system()
@@ -189,9 +214,34 @@ def setup_function(
         my_simulation_parameters=my_simulation_parameters,
     )
 
-    # Build Heat Pump
+    # Build Heat Pump (optional: select model closest to ideal size from lookup)
+    sizing_mode = (cli_overrides.get_override("HEATGEN_SIZING") or "").strip().upper()
+    if sizing_mode == "IDEAL_LOOKUP":
+        ideal_heating_power_in_watt = heating_system_selection.get_ideal_power_from_lookup(
+            arch=arch_used, weather=weather_used
+        )
+        chosen_hp = heating_system_selection.pick_heat_pump_closest_to_ideal(
+            ideal_power_in_watt=ideal_heating_power_in_watt
+        )
+        log.information(
+            f"Selected heat pump model for ARCH={arch_used} WEATHER={weather_used}: "
+            f"{chosen_hp.manufacturer} / {chosen_hp.name} "
+            f"(nominal {chosen_hp.nominal_heating_power_in_watt / 1e3:.1f} kW), "
+            f"ideal {ideal_heating_power_in_watt / 1e3:.2f} kW."
+        )
+        my_heat_pump_config = generic_heat_pump.GenericHeatPumpConfig(
+            building_name="BUI1",
+            name="HeatPump",
+            manufacturer=chosen_hp.manufacturer,
+            heat_pump_name=chosen_hp.name,
+            min_operation_time=60 * 60,
+            min_idle_time=15 * 60,
+        )
+    else:
+        my_heat_pump_config = generic_heat_pump.GenericHeatPumpConfig.get_default_generic_heat_pump_config()
+
     my_heat_pump = generic_heat_pump.GenericHeatPump(
-        config=generic_heat_pump.GenericHeatPumpConfig.get_default_generic_heat_pump_config(),
+        config=my_heat_pump_config,
         my_simulation_parameters=my_simulation_parameters,
     )
 
