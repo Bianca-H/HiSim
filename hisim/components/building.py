@@ -56,6 +56,7 @@ from hisim import loadtypes as lt
 from hisim import log, utils
 from hisim import cli_overrides
 from hisim.components.loadprofilegenerator_utsp_connector import UtspLpgConnector
+from hisim.components.sia2024_occupancy import SIA2024Occupancy
 from hisim.components.weather import Weather
 from hisim.loadtypes import OutputPostprocessingRules
 from hisim.sim_repository_singleton import SingletonDictKeyEnum, SingletonSimRepository
@@ -116,6 +117,20 @@ class BuildingConfig(cp.ConfigBase):
     maintenance_costs_in_euro_per_year:  Optional[float]
     # subsidies as percentage of investment costs
     subsidy_as_percentage_of_investment_costs: Optional[float]
+    #: Natural ventilation rate per person in m3/h/person (applied when people are present, if enabled).
+    natural_ventilation_m3_per_h_per_person: float = 0.0
+    #: If true, add occupancy-driven natural ventilation heat transfer.
+    enable_occupancy_driven_natural_ventilation: bool = True
+    #: If true, add extra summer window ventilation to reach a target ACH when occupants are present
+    #: and comfort is exceeded (implemented as additional indoor-air mixing).
+    enable_summer_window_ventilation_ach: bool = True
+    #: Target air changes per hour (ACH) established when summer window ventilation is active.
+    summer_window_ventilation_target_ach_per_h: float = 2.0
+    #: Open windows when outdoor air is cooler than operative temperature.
+    # If False, windows open when outdoor air is warmer than operative temperature.
+    summer_window_ventilation_open_when_outdoor_cooler_than_operative: bool = True
+    #: Only apply summer window ventilation when the running mean outdoor temperature is above this threshold.
+    summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius: float = -10.0
 
     @classmethod
     def get_default_german_single_family_home(
@@ -221,6 +236,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
 
@@ -274,6 +294,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
     
@@ -328,6 +353,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
     
@@ -382,6 +412,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
     
@@ -436,6 +471,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
     
@@ -490,6 +530,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
     
@@ -544,6 +589,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
     
@@ -598,6 +648,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
     
@@ -652,6 +707,11 @@ class BuildingConfig(cp.ConfigBase):
             maintenance_costs_in_euro_per_year=None,  # noqa: E501 # todo: check value
             subsidy_as_percentage_of_investment_costs=None,
             lifetime_in_years=None,  # todo: check value
+            #natural_ventilation_m3_per_h_per_person=29.0,
+            #enable_occupancy_driven_natural_ventilation=True,
+            #enable_summer_window_ventilation_ach=True,
+            #summer_window_ventilation_target_ach_per_h=3.0,
+            #summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius=19.0,
         )
         return config
 
@@ -720,6 +780,9 @@ class Building(cp.Component):
     # Inputs -> occupancy
     HeatingByResidents = "HeatingByResidents"
     HeatingByDevices = "HeatingByDevices"
+    NumberOfResidents = "NumberOfResidents"
+    AppliedNaturalVentilationAirFlow = "AppliedNaturalVentilationAirFlow"
+    AppliedNaturalVentilationHeatTransferCoefficient = "AppliedNaturalVentilationHeatTransferCoefficient"
 
     # Inputs -> weather
     Altitude = "Altitude"
@@ -747,6 +810,8 @@ class Building(cp.Component):
     TemperatureUnderTemperatureDegreeHours = "TemperatureUnderTemperatureDegreeHours"
     TotalThermalPowerToResidence = "TotalThermalPowerToResidence"
     SolarGainThroughWindows = "SolarGainThroughWindows"
+    AppliedSolarShadingFactor = "AppliedSolarShadingFactor"
+    AppliedSolarTransmissivity = "AppliedSolarTransmissivity"
     InternalHeatGainsFromOccupancy = "InternalHeatGainsFromOccupancy"
     TheoreticalThermalBuildingDemand = "TheoreticalThermalBuildingDemand"
     TheoreticalThermalEnergyBuildingDemand = "TheoreticalThermalEnergyBuildingDemand"
@@ -754,6 +819,10 @@ class Building(cp.Component):
     TheoreticalHeatingEnergyDemand = "TheoreticalHeatingEnergyDemand"
     TheoreticalCoolingDemand = "TheoreticalCoolingDemand"
     TheoreticalCoolingEnergyDemand = "TheoreticalCoolingEnergyDemand"
+    PotentialHeatingPowerUntilUpperComfortBound = "PotentialHeatingPowerUntilUpperComfortBound"
+    PotentialHeatingEnergyUntilUpperComfortBound = "PotentialHeatingEnergyUntilUpperComfortBound"
+    PotentialCoolingPowerUntilLowerComfortBound = "PotentialCoolingPowerUntilLowerComfortBound"
+    PotentialCoolingEnergyUntilLowerComfortBound = "PotentialCoolingEnergyUntilLowerComfortBound"
     ActualThermalBuildingSupply = "ActualThermalBuildingSupply"
     ActualHeatingSupply = "ActualHeatingSupply"
     ActualHeatingEnergySupply = "ActualHeatingEnergySupply"
@@ -763,6 +832,9 @@ class Building(cp.Component):
     HeatFluxToThermalMass = "HeatFluxToThermalMass"
     TotalThermalMassHeatFlux = "TotalThermalMassHeatFlux"
     OpenWindow = "OpenWindow"
+    # Helper outputs for heat pump controller seasonal gating.
+    RunningAverageOutsideTemperature48hOutputForController = "RunningAverageOutsideTemperature48hOutputForController"
+    RunningAverageOutsideTemperature24hOutputForController = "RunningAverageOutsideTemperature24hOutputForController"
 
     @utils.measure_execution_time
     def __init__(
@@ -791,11 +863,15 @@ class Building(cp.Component):
         self.set_cooling_temperature_in_celsius = self.buildingconfig.set_cooling_temperature_in_celsius
         self.window_open: int = 0
 
+        # Optional: location-specific facade/window shading factor (does NOT affect PV).
+        # Load this before creating the cache key so shaded/unshaded runs never share the same solar-gain cache.
+        self.location_shading_factor: float = self._load_location_shading_factor()
+
         (
             self.is_in_cache,
             self.cache_file_path,
         ) = utils.get_cache_file(
-            self.config.name,
+            f"{self.config.name}_shading_{self.location_shading_factor:.3f}",
             self.buildingconfig,
             self.my_simulation_parameters,
         )
@@ -806,10 +882,6 @@ class Building(cp.Component):
         self.my_building_information = BuildingInformation(
             config=self.buildingconfig,
         )
-
-        # Optional: location-specific facade/window shading factor (does NOT affect PV).
-        # Loaded once so we can apply it to solar gains through windows.
-        self.location_shading_factor: float = self._load_location_shading_factor()
 
         self.build()
 
@@ -916,6 +988,13 @@ class Building(cp.Component):
             lt.Units.WATT,
             True,
         )
+        self.number_of_residents_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.NumberOfResidents,
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            mandatory=False,
+        )
 
         self.device_heat_gain_channel: cp.ComponentInput = self.add_input(
             self.component_name,
@@ -1005,6 +1084,55 @@ class Building(cp.Component):
             output_description=f"here a description for {self.SolarGainThroughWindows} will follow.",
             postprocessing_flag=[OutputPostprocessingRules.DISPLAY_IN_WEBTOOL],
         )
+        self.applied_natural_ventilation_air_flow_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.AppliedNaturalVentilationAirFlow,
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Applied occupancy-driven natural ventilation outdoor air flow in m3/h.",
+        )
+        self.applied_natural_ventilation_h_ve_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.AppliedNaturalVentilationHeatTransferCoefficient,
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Applied additional ventilation heat transfer coefficient from natural ventilation in W/K.",
+        )
+        self.applied_summer_window_ventilation_extra_air_flow_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            "AppliedSummerWindowVentilationExtraAirFlow",
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Additional summer window ventilation air flow added to reach target ACH (m3/h).",
+        )
+        self.applied_summer_window_ventilation_extra_ach_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            "AppliedSummerWindowVentilationExtraACH",
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Additional summer window ventilation air changes per hour added to reach target ACH (1/h).",
+        )
+        self.applied_summer_window_ventilation_total_ach_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            "AppliedSummerWindowVentilationTotalACH",
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Total summer window ventilation air changes per hour (current base + extra) when summer ventilation is active (1/h).",
+        )
+        self.applied_solar_shading_factor_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.AppliedSolarShadingFactor,
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Applied location-specific solar shading factor for building solar gains (0..1).",
+        )
+        self.applied_solar_transmissivity_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.AppliedSolarTransmissivity,
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Applied solar transmissivity for building solar gains (= 1 - shading_factor).",
+        )
         self.internal_heat_gains_from_residents_and_devices_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
             self.InternalHeatGainsFromOccupancy,
@@ -1054,6 +1182,34 @@ class Building(cp.Component):
             lt.LoadTypes.COOLING,
             lt.Units.WATT_HOUR,
             output_description="Theoretical cooling demand of the building (Kühlbedarf).",
+        )
+        self.potential_heating_power_until_upper_comfort_bound_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.PotentialHeatingPowerUntilUpperComfortBound,
+            lt.LoadTypes.HEATING,
+            lt.Units.WATT,
+            output_description="Potential additional heating power that could be added in this timestep until the upper comfort bound is reached (0 if already above upper bound).",
+        )
+        self.potential_heating_energy_until_upper_comfort_bound_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.PotentialHeatingEnergyUntilUpperComfortBound,
+            lt.LoadTypes.HEATING,
+            lt.Units.WATT_HOUR,
+            output_description="Potential additional heating energy (Wh per timestep) that could be added until the upper comfort bound is reached.",
+        )
+        self.potential_cooling_power_until_lower_comfort_bound_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.PotentialCoolingPowerUntilLowerComfortBound,
+            lt.LoadTypes.COOLING,
+            lt.Units.WATT,
+            output_description="Potential additional cooling power that could be removed in this timestep until the lower comfort bound is reached (0 if already below lower bound).",
+        )
+        self.potential_cooling_energy_until_lower_comfort_bound_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.PotentialCoolingEnergyUntilLowerComfortBound,
+            lt.LoadTypes.COOLING,
+            lt.Units.WATT_HOUR,
+            output_description="Potential additional cooling energy (Wh per timestep) that could be removed until the lower comfort bound is reached.",
         )
         self.actual_thermal_building_supply_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
@@ -1120,11 +1276,32 @@ class Building(cp.Component):
             output_description=f"here a description for {self.OpenWindow} will follow.",
         )
 
+        # Controller helper outputs (mirrors of the weather running-mean inputs with fallback).
+        self.running_average_outside_temperature_48h_output_for_controller_channel: cp.ComponentOutput = (
+            self.add_output(
+                self.component_name,
+                self.RunningAverageOutsideTemperature48hOutputForController,
+                lt.LoadTypes.TEMPERATURE,
+                lt.Units.CELSIUS,
+                output_description="48h running mean outdoor temperature (helper for heat pump controller).",
+            )
+        )
+        self.running_average_outside_temperature_24h_output_for_controller_channel: cp.ComponentOutput = (
+            self.add_output(
+                self.component_name,
+                self.RunningAverageOutsideTemperature24hOutputForController,
+                lt.LoadTypes.TEMPERATURE,
+                lt.Units.CELSIUS,
+                output_description="24h running mean outdoor temperature (helper for heat pump controller).",
+            )
+        )
+
         # =================================================================================================================================
         # Add and get default connections
 
         self.add_default_connections(self.get_default_connections_from_weather())
         self.add_default_connections(self.get_default_connections_from_utsp_occupancy())
+        self.add_default_connections(self.get_default_connections_from_sia2024_occupancy())
         self.add_default_connections(self.get_default_connections_from_hds())
         self.add_default_connections(self.get_default_connections_from_electric_heater())
         self.add_default_connections(self.get_default_connections_from_energy_management_system())
@@ -1274,6 +1451,20 @@ class Building(cp.Component):
         )
         return connections
 
+    def get_default_connections_from_sia2024_occupancy(self):
+        """Get SIA2024 occupancy default connections (optional)."""
+
+        connections = []
+        sia_classname = SIA2024Occupancy.get_classname()
+        connections.append(
+            cp.ComponentConnection(
+                Building.NumberOfResidents,
+                sia_classname,
+                SIA2024Occupancy.NumberOfResidents,
+            )
+        )
+        return connections
+
     def get_default_connections_from_hds(
         self,
     ):
@@ -1356,16 +1547,43 @@ class Building(cp.Component):
 
         # Adaptive comfort: use running-average outdoor air temperature (48h preferred).
         running_average_outside_temperature_in_celsius = temperature_outside_in_celsius
+        running_mean_outdoor_48h_for_controller_in_celsius = temperature_outside_in_celsius
+        running_mean_outdoor_24h_for_controller_in_celsius = temperature_outside_in_celsius
         if self.running_average_outside_temperature_48h_channel.source_output is not None:
             candidate = stsv.get_input_value(self.running_average_outside_temperature_48h_channel)
             if abs(candidate) > 1e-6 or abs(temperature_outside_in_celsius) < 1e-6:
                 running_average_outside_temperature_in_celsius = candidate
+                running_mean_outdoor_48h_for_controller_in_celsius = candidate
         elif self.running_average_outside_temperature_24h_channel.source_output is not None:
             candidate = stsv.get_input_value(self.running_average_outside_temperature_24h_channel)
             if abs(candidate) > 1e-6 or abs(temperature_outside_in_celsius) < 1e-6:
                 running_average_outside_temperature_in_celsius = candidate
+                running_mean_outdoor_24h_for_controller_in_celsius = candidate
 
         building_temperature_modifier = stsv.get_input_value(self.building_temperature_modifier_channel)
+
+        # Occupancy-driven natural ventilation (Swiss SFH archetypes): 29 m3/h/person when people are present.
+        # Implemented as additional ventilation heat transfer coefficient H_ve_add (W/K).
+        # 0.34 Wh/(m3*K) * m3/h == W/K
+        h_ve_add_in_watt_per_kelvin = 0.0
+        vdot_m3_per_h = 0.0
+        if self.buildingconfig.enable_occupancy_driven_natural_ventilation:
+            people_present = 0.0
+            if self.number_of_residents_channel.source_output is not None:
+                people_present = float(stsv.get_input_value(self.number_of_residents_channel))
+            if people_present > 0.0:
+                vdot_m3_per_h = float(self.buildingconfig.natural_ventilation_m3_per_h_per_person) * people_present
+                h_ve_add_in_watt_per_kelvin = 0.34 * vdot_m3_per_h
+
+        # Apply dynamic ventilation coefficient for this timestep.
+        base_h_ve = float(
+            getattr(
+                self,
+                "_base_thermal_conductance_by_ventilation_in_watt_per_kelvin",
+                self.thermal_conductance_by_ventilation_in_watt_per_kelvin,
+            )
+        )
+        self.thermal_conductance_by_ventilation_in_watt_per_kelvin = base_h_ve + h_ve_add_in_watt_per_kelvin
 
         thermal_power_delivered_in_watt = 0.0
         if self.thermal_power_delivered_channel.source_output is not None:
@@ -1527,6 +1745,169 @@ class Building(cp.Component):
         stsv.set_output_value(self.temperature_comfort_lower_bound_channel, comfort_lower_bound)
         stsv.set_output_value(self.temperature_comfort_upper_bound_channel, comfort_upper_bound)
 
+        # Comfort-band thermal flexibility (ISO 13790 C.4 two-point linearization).
+        # We compute the required thermal power to hit a *target operative* temperature at end of timestep,
+        # translated to an indoor-air temperature target using TOP ≈ (T_air + T_surface)/2.
+        potential_heating_power_in_watt: float = 0.0
+        potential_cooling_power_in_watt: float = 0.0
+        dt_h = self.my_simulation_parameters.seconds_per_timestep / 3600.0
+        if dt_h > 0.0:
+            t_air_zero = self.calc_indoor_air_temperature_zero_step_one(
+                previous_thermal_mass_temperature_in_celsius=previous_thermal_mass_temperature_in_celsius,
+                outside_temperature_in_celsius=temperature_outside_in_celsius,
+                next_thermal_mass_temperature_in_celsius=next_thermal_mass_temperature_in_celsius,
+                heat_flux_indoor_air_in_watt=internal_heat_flux_to_indoor_air_in_watt,
+                heat_flux_internal_room_surface_in_watt=internal_heat_flux_to_internal_room_surface_in_watt,
+            )
+            (t_air_ten, phi_ten) = self.calc_indoor_air_temperature_ten_step_two(
+                previous_thermal_mass_temperature_in_celsius=previous_thermal_mass_temperature_in_celsius,
+                outside_temperature_in_celsius=temperature_outside_in_celsius,
+                next_thermal_mass_temperature_in_celsius=next_thermal_mass_temperature_in_celsius,
+                heat_flux_indoor_air_in_watt=internal_heat_flux_to_indoor_air_in_watt,
+                heat_flux_internal_room_surface_in_watt=internal_heat_flux_to_internal_room_surface_in_watt,
+            )
+            denom = (t_air_ten - t_air_zero)
+            if abs(denom) > 1e-9:
+                # Convert comfort operative bounds to equivalent indoor-air targets.
+                t_air_target_upper = 2.0 * comfort_upper_bound - internal_surface_temperature_in_celsius
+                t_air_target_lower = 2.0 * comfort_lower_bound - internal_surface_temperature_in_celsius
+
+                phi_to_upper = phi_ten * (t_air_target_upper - t_air_zero) / denom
+                phi_to_lower = phi_ten * (t_air_target_lower - t_air_zero) / denom
+
+                # Only count "add heat" if we're currently below the upper comfort bound.
+                if operative_temperature_in_celsius < comfort_upper_bound:
+                    potential_heating_power_in_watt = max(0.0, float(phi_to_upper))
+                # Only count "remove heat" if we're currently above the lower comfort bound.
+                if operative_temperature_in_celsius > comfort_lower_bound:
+                    potential_cooling_power_in_watt = max(0.0, -float(phi_to_lower))
+
+        stsv.set_output_value(
+            self.potential_heating_power_until_upper_comfort_bound_channel,
+            potential_heating_power_in_watt,
+        )
+        stsv.set_output_value(
+            self.potential_heating_energy_until_upper_comfort_bound_channel,
+            potential_heating_power_in_watt * dt_h,
+        )
+        stsv.set_output_value(
+            self.potential_cooling_power_until_lower_comfort_bound_channel,
+            potential_cooling_power_in_watt,
+        )
+        stsv.set_output_value(
+            self.potential_cooling_energy_until_lower_comfort_bound_channel,
+            potential_cooling_power_in_watt * dt_h,
+        )
+
+        # Helpers for heat pump controller seasonal gating.
+        stsv.set_output_value(
+            self.running_average_outside_temperature_48h_output_for_controller_channel,
+            running_mean_outdoor_48h_for_controller_in_celsius,
+        )
+        stsv.set_output_value(
+            self.running_average_outside_temperature_24h_output_for_controller_channel,
+            running_mean_outdoor_24h_for_controller_in_celsius,
+        )
+
+        # Optional additional summer ventilation to reach a target ACH.
+        # Implemented as additional indoor-air mixing (partial exchange with outdoor air).
+        vdot_summer_window_extra_m3_per_h: float = 0.0
+        summer_window_extra_ach_per_h: float = 0.0
+        summer_window_total_ach_per_h: float = 0.0
+        summer_window_open: int = 0
+        if (
+            self.buildingconfig.enable_summer_window_ventilation_ach
+            and internal_heat_gains_through_occupancy_in_watt > 0.0
+            and running_average_outside_temperature_in_celsius
+            > float(
+                self.buildingconfig.summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius
+            )
+            and operative_temperature_in_celsius > comfort_upper_bound
+            and (
+                temperature_outside_in_celsius < operative_temperature_in_celsius
+                if self.buildingconfig.summer_window_ventilation_open_when_outdoor_cooler_than_operative
+                else temperature_outside_in_celsius > operative_temperature_in_celsius
+            )
+        ):
+            # Air mixing timescale for the extra ACH on top of already active ventilation.
+            dt_h = self.my_simulation_parameters.seconds_per_timestep / 3600.0
+            volume_air_m3 = float(self.my_building_information.buildingdata_ref["h_room"].values[0]) * float(
+                self.my_building_information.scaled_conditioned_floor_area_in_m2
+            )
+            if volume_air_m3 > 0.0:
+                # Current total ventilation ACH derived from the active ventilation heat transfer conductance.
+                ach_current = float(self.thermal_conductance_by_ventilation_in_watt_per_kelvin) / (
+                    0.34 * volume_air_m3
+                )
+                ach_target = float(self.buildingconfig.summer_window_ventilation_target_ach_per_h)
+                summer_window_extra_ach_per_h = max(0.0, ach_target - ach_current)
+                summer_window_total_ach_per_h = ach_current + summer_window_extra_ach_per_h
+                if summer_window_extra_ach_per_h > 0.0:
+                    # Convert ACH -> additional outdoor airflow.
+                    indoor_air_temperature_old = indoor_air_temperature_in_celsius
+                    operative_temperature_old = operative_temperature_in_celsius
+                    t_out = temperature_outside_in_celsius
+                    t_surface = internal_surface_temperature_in_celsius
+
+                    # Partial air exchange: T_new = T_out + (T_in - T_out)*exp(-ACH*dt)
+                    # If we cool too aggressively within the timestep, we can overshoot and push
+                    # operative temperature below the comfort lower bound. Cap the extra ACH
+                    # so that the *new* operative temperature stays >= comfort_lower_bound.
+                    vdot_summer_window_extra_m3_per_h = summer_window_extra_ach_per_h * volume_air_m3
+
+                    indoor_air_temperature_in_celsius_after = t_out + (indoor_air_temperature_old - t_out) * math.exp(
+                        -summer_window_extra_ach_per_h * dt_h
+                    )
+                    operative_after = (indoor_air_temperature_in_celsius_after + t_surface) / 2
+
+                    if operative_after < comfort_lower_bound:
+                        # Minimum indoor air temperature to keep operative >= comfort_lower_bound.
+                        indoor_air_min = 2.0 * comfort_lower_bound - t_surface
+                        denom = (indoor_air_temperature_old - t_out)
+                        if abs(denom) < 1e-9:
+                            # No meaningful mixing possible.
+                            summer_window_extra_ach_per_h = 0.0
+                        else:
+                            # Solve exp(-ach*dt) >= (indoor_air_min - t_out)/(indoor_air_old - t_out)
+                            r = (indoor_air_min - t_out) / denom
+                            if r <= 0.0:
+                                # Requirement already satisfied for any reasonable ach.
+                                pass
+                            elif r >= 1.0:
+                                # Would require no extra cooling.
+                                summer_window_extra_ach_per_h = 0.0
+                            else:
+                                max_ach = -math.log(r) / dt_h
+                                summer_window_extra_ach_per_h = min(summer_window_extra_ach_per_h, max_ach)
+
+                    if summer_window_extra_ach_per_h <= 0.0:
+                        # Keep base ventilation only; no extra window ventilation.
+                        summer_window_extra_ach_per_h = 0.0
+                        summer_window_total_ach_per_h = ach_current
+                        vdot_summer_window_extra_m3_per_h = 0.0
+                        # (indoor_air_temperature_in_celsius + operative_temperature_in_celsius stay unchanged)
+                        summer_window_open = 0
+                    else:
+                        summer_window_total_ach_per_h = ach_current + summer_window_extra_ach_per_h
+                        vdot_summer_window_extra_m3_per_h = summer_window_extra_ach_per_h * volume_air_m3
+
+                        indoor_air_temperature_in_celsius = t_out + (indoor_air_temperature_old - t_out) * math.exp(
+                            -summer_window_extra_ach_per_h * dt_h
+                        )
+                        operative_temperature_in_celsius = (
+                            indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius
+                        ) / 2
+                        summer_window_open = 1
+
+        # If we adjusted indoor air above, update the already-set outputs before further comfort/degrees calculations.
+        if summer_window_open == 1:
+            self.window_open = 1
+            stsv.set_output_value(self.indoor_air_temperature_channel, indoor_air_temperature_in_celsius)
+            stsv.set_output_value(
+                self.operative_temperature_channel,
+                (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2,
+            )
+
         # Degree-hours contribution per timestep.
         # Uses the timestep duration in hours (dt_h), so that summing over timesteps yields total degree-hours.
         dt_h = self.my_simulation_parameters.seconds_per_timestep / 3600.0
@@ -1551,6 +1932,22 @@ class Building(cp.Component):
         stsv.set_output_value(self.total_thermal_power_to_residence_channel, total_thermal_power_to_residence_in_watt)
 
         stsv.set_output_value(self.solar_gain_through_windows_channel, solar_heat_gain_through_windows_in_watt)
+        stsv.set_output_value(self.applied_solar_shading_factor_channel, float(self.location_shading_factor))
+        stsv.set_output_value(self.applied_solar_transmissivity_channel, float(1.0 - self.location_shading_factor))
+        stsv.set_output_value(self.applied_natural_ventilation_air_flow_channel, vdot_m3_per_h)
+        stsv.set_output_value(self.applied_natural_ventilation_h_ve_channel, h_ve_add_in_watt_per_kelvin)
+        stsv.set_output_value(
+            self.applied_summer_window_ventilation_extra_air_flow_channel,
+            vdot_summer_window_extra_m3_per_h,
+        )
+        stsv.set_output_value(
+            self.applied_summer_window_ventilation_extra_ach_channel,
+            summer_window_extra_ach_per_h,
+        )
+        stsv.set_output_value(
+            self.applied_summer_window_ventilation_total_ach_channel,
+            summer_window_total_ach_per_h,
+        )
         stsv.set_output_value(
             self.internal_heat_gains_from_residents_and_devices_channel,
             internal_heat_gains_through_occupancy_in_watt + internal_heat_gains_through_devices_in_watt,
@@ -1753,6 +2150,8 @@ class Building(cp.Component):
             self.heat_transfer_coeff_indoor_air_and_internal_surface_in_watt_per_kelvin,
             self.thermal_conductance_by_ventilation_in_watt_per_kelvin,
         ) = self.get_conductances()
+        # Store base ventilation coefficient so we can add occupancy-driven natural ventilation dynamically.
+        self._base_thermal_conductance_by_ventilation_in_watt_per_kelvin = self.thermal_conductance_by_ventilation_in_watt_per_kelvin
 
         # send building parameters 5r1c to PID controller and to the MPC controller to generate an equivalent state space model
         # state space represntation is used for tuning of the pid and as a prediction model in the model predictive controller

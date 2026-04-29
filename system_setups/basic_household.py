@@ -11,10 +11,12 @@ from hisim.components import building
 from hisim.components import generic_heat_pump
 from hisim.components import electricity_meter
 from hisim.components import sia2024_occupancy
+from hisim.components import flexibility_potential
 from hisim import loadtypes
 from hisim import cli_overrides
 from hisim import log
 from hisim import heating_system_selection
+from hisim.postprocessingoptions import PostProcessingOptions
 
 
 __authors__ = "Vitor Hugo Bellotto Zago, Noah Pflugradt"
@@ -55,6 +57,10 @@ def setup_function(
     temperature_air_cooling_in_celsius = 24.0
     offset = 0.5
     hp_mode = 2
+    hp_control_strategy = (cli_overrides.get_override("HP_CONTROL_STRATEGY") or "STRICT_COMFORT_BAND_V1").strip().lower()
+    comfort_band_inner_offset_in_celsius = 0.5
+    heating_disabled_above_running_mean_outdoor_temperature_in_celsius = 18.0
+    cooling_enabled_above_running_mean_outdoor_temperature_in_celsius = 22.0
 
     # Defaults for optional CLI overrides (defined once, reused below)
     default_arch = "01_CH"
@@ -76,6 +82,14 @@ def setup_function(
         #my_simulation_parameters = SimulationParameters.full_year_with_only_plots(
             #year=year, seconds_per_timestep=seconds_per_timestep
         #)
+
+    batch_open_explorer = (cli_overrides.get_override("BATCH_OPEN_EXPLORER") or "").strip()
+    if batch_open_explorer == "0":
+        my_simulation_parameters.post_processing_options = [
+            opt
+            for opt in my_simulation_parameters.post_processing_options
+            if opt != PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER
+        ]
 
     my_sim.set_simulation_parameters(my_simulation_parameters)
     print(my_simulation_parameters.post_processing_options)
@@ -210,6 +224,14 @@ def setup_function(
             offset=offset,
             mode=hp_mode,
             use_adaptive_comfort_band=True,
+            control_strategy=hp_control_strategy,
+            comfort_band_inner_offset_in_celsius=comfort_band_inner_offset_in_celsius,
+            heating_disabled_above_running_mean_outdoor_temperature_in_celsius=(
+                heating_disabled_above_running_mean_outdoor_temperature_in_celsius
+            ),
+            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=(
+                cooling_enabled_above_running_mean_outdoor_temperature_in_celsius
+            ),
         ),
         my_simulation_parameters=my_simulation_parameters,
     )
@@ -243,6 +265,19 @@ def setup_function(
     my_heat_pump = generic_heat_pump.GenericHeatPump(
         config=my_heat_pump_config,
         my_simulation_parameters=my_simulation_parameters,
+    )
+
+    # Flexibility potentials (comfort-band headroom + PV/buffer conversion)
+    my_flex_potential = flexibility_potential.FlexibilityPotential(
+        my_simulation_parameters=my_simulation_parameters,
+        config=flexibility_potential.FlexibilityPotentialConfig(
+            building_name="BUI1",
+            name="FlexibilityPotential",
+            # If the system cannot derive an effective EER for cooling (e.g., no cooling device),
+            # do not count electricity->cooling conversion by default.
+            fallback_heating_cop=1.0,
+            fallback_cooling_eer=0.0,
+        ),
     )
 
     # =================================================================================================================================
@@ -297,6 +332,11 @@ def setup_function(
             my_occupancy.component_name,
             my_occupancy.HeatingByDevices,
         )
+        my_building.connect_input(
+            my_building.NumberOfResidents,
+            my_occupancy.component_name,
+            my_occupancy.NumberOfResidents,
+        )
     else:
         my_building.connect_input(
             my_building.HeatingByResidents,
@@ -324,6 +364,40 @@ def setup_function(
     )
     my_heat_pump.connect_only_predefined_connections(my_weather, my_heat_pump_controller)
     my_heat_pump.get_default_connections_heatpump_controller()
+
+    # FlexibilityPotential connections
+    my_flex_potential.connect_input(
+        my_flex_potential.PotentialHeatingEnergyUntilUpperComfortBound,
+        my_building.component_name,
+        my_building.PotentialHeatingEnergyUntilUpperComfortBound,
+    )
+    my_flex_potential.connect_input(
+        my_flex_potential.PotentialCoolingEnergyUntilLowerComfortBound,
+        my_building.component_name,
+        my_building.PotentialCoolingEnergyUntilLowerComfortBound,
+    )
+    # PV electricity available this timestep (Wh). Battery/EV can be added similarly in other setups.
+    my_flex_potential.connect_input(
+        my_flex_potential.PvElectricityEnergy,
+        my_photovoltaic_system.component_name,
+        my_photovoltaic_system.ElectricityEnergyOutput,
+    )
+    # Derive effective COP/EER from the heat pump's actual operation (if it is running).
+    my_flex_potential.connect_input(
+        my_flex_potential.HvacHeatingPower,
+        my_heat_pump.component_name,
+        my_heat_pump.Heating,
+    )
+    my_flex_potential.connect_input(
+        my_flex_potential.HvacCoolingPower,
+        my_heat_pump.component_name,
+        my_heat_pump.Cooling,
+    )
+    my_flex_potential.connect_input(
+        my_flex_potential.HvacElectricPower,
+        my_heat_pump.component_name,
+        my_heat_pump.ElectricityOutput,
+    )
     # =================================================================================================================================
     # Add Components to Simulation Parameters
 
@@ -334,3 +408,4 @@ def setup_function(
     my_sim.add_component(my_building)
     my_sim.add_component(my_heat_pump_controller)
     my_sim.add_component(my_heat_pump)
+    my_sim.add_component(my_flex_potential)

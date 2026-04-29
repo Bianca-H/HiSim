@@ -89,6 +89,10 @@ class GenericHeatPumpControllerConfig(cp.ConfigBase):
     offset: float
     mode: int
     use_adaptive_comfort_band: bool
+    control_strategy: str = "legacy"
+    comfort_band_inner_offset_in_celsius: float = 0.5
+    heating_disabled_above_running_mean_outdoor_temperature_in_celsius: float = 12.0
+    cooling_enabled_above_running_mean_outdoor_temperature_in_celsius: float = 19.0
 
     @classmethod
     def get_default_generic_heat_pump_controller_config(cls, building_name: str = "BUI1",) -> Any:
@@ -101,6 +105,10 @@ class GenericHeatPumpControllerConfig(cp.ConfigBase):
             offset=0.5,
             mode=1,
             use_adaptive_comfort_band=True,
+            control_strategy="legacy",
+            comfort_band_inner_offset_in_celsius=0.5,
+            heating_disabled_above_running_mean_outdoor_temperature_in_celsius=12.0,
+            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=19.0,
         )
 
 
@@ -635,9 +643,15 @@ class GenericHeatPumpController(cp.Component):
     ElectricityInput = "ElectricityInput"
     TemperatureComfortLowerBound = "TemperatureComfortLowerBound"
     TemperatureComfortUpperBound = "TemperatureComfortUpperBound"
+    RunningAverageOutsideTemperature48h = "RunningAverageOutsideTemperature48h"
 
     # Outputs
     State = "State"
+    AppliedControlLowerTemperature = "AppliedControlLowerTemperature"
+    AppliedControlUpperTemperature = "AppliedControlUpperTemperature"
+    ControlRunningMeanOutdoorTemperature48h = "ControlRunningMeanOutdoorTemperature48h"
+    ControlHeatingAllowed = "ControlHeatingAllowed"
+    ControlCoolingAllowed = "ControlCoolingAllowed"
 
     # Similar components to connect to:
     # 1. Building
@@ -694,6 +708,13 @@ class GenericHeatPumpController(cp.Component):
             lt.Units.CELSIUS,
             False,
         )
+        self.running_average_outside_temperature_48h_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.RunningAverageOutsideTemperature48h,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            False,
+        )
         self.state_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
             self.State,
@@ -701,11 +722,51 @@ class GenericHeatPumpController(cp.Component):
             lt.Units.ANY,
             output_description=f"here a description for {self.State} will follow.",
         )
+        self.applied_control_lower_temperature_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.AppliedControlLowerTemperature,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            output_description="Applied lower temperature bound used by the heat pump controller.",
+        )
+        self.applied_control_upper_temperature_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.AppliedControlUpperTemperature,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            output_description="Applied upper temperature bound used by the heat pump controller.",
+        )
+        self.control_running_mean_outdoor_temperature_48h_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ControlRunningMeanOutdoorTemperature48h,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            output_description="48h running mean outdoor temperature used by the controller for seasonal gating.",
+        )
+        self.control_heating_allowed_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ControlHeatingAllowed,
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Whether heating is allowed by the controller gating logic (strict strategy).",
+        )
+        self.control_cooling_allowed_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.ControlCoolingAllowed,
+            lt.LoadTypes.ANY,
+            lt.Units.ANY,
+            output_description="Whether cooling is allowed by the controller gating logic (strict strategy).",
+        )
 
         self.add_default_connections(self.get_default_connections_from_building())
         self.add_default_connections(self.get_default_connections_from_electricity_meter())
         self.controller_heatpumpmode: Any
         self.previous_heatpump_mode: Any
+        self.applied_control_lower_temperature_in_celsius: float = self.heatpump_controller_config.temperature_air_heating_in_celsius
+        self.applied_control_upper_temperature_in_celsius: float = self.heatpump_controller_config.temperature_air_cooling_in_celsius
+        self.last_control_running_mean_outdoor_temperature_48h: Optional[float] = None
+        self.last_control_heating_allowed: Optional[bool] = None
+        self.last_control_cooling_allowed: Optional[bool] = None
 
     def get_default_connections_from_building(self) -> List[cp.ComponentConnection]:
         """Get building default connections."""
@@ -731,6 +792,13 @@ class GenericHeatPumpController(cp.Component):
                 GenericHeatPumpController.TemperatureComfortUpperBound,
                 building_classname,
                 Building.TemperatureComfortUpperBound,
+            )
+        )
+        connections.append(
+            cp.ComponentConnection(
+                GenericHeatPumpController.RunningAverageOutsideTemperature48h,
+                building_classname,
+                Building.RunningAverageOutsideTemperature48hOutputForController,
             )
         )
         return connections
@@ -802,6 +870,11 @@ class GenericHeatPumpController(cp.Component):
             # Retrieves inputs
             temperature_mean_old = stsv.get_input_value(self.temperature_mean_channel)
             electricity_input = stsv.get_input_value(self.electricity_input_channel)
+            running_average_outside_temperature_48h = None
+            if self.running_average_outside_temperature_48h_channel.source_output is not None:
+                running_average_outside_temperature_48h = stsv.get_input_value(
+                    self.running_average_outside_temperature_48h_channel
+                )
 
             effective_temperature_set_heating = self.temperature_set_heating
             effective_temperature_set_cooling = self.temperature_set_cooling
@@ -816,7 +889,14 @@ class GenericHeatPumpController(cp.Component):
                     effective_temperature_set_heating = comfort_lower
                     effective_temperature_set_cooling = comfort_upper
 
-            if self.mode == 1:
+            if self.config.control_strategy == "strict_comfort_band_v1":
+                self.strict_comfort_band_conditions(
+                    set_temperature=temperature_mean_old,
+                    heating_set_temperature=effective_temperature_set_heating,
+                    cooling_set_temperature=effective_temperature_set_cooling,
+                    running_average_outside_temperature_48h=running_average_outside_temperature_48h,
+                )
+            elif self.mode == 1:
                 self.conditions(
                     set_temperature=temperature_mean_old,
                     heating_set_temperature=effective_temperature_set_heating,
@@ -837,6 +917,92 @@ class GenericHeatPumpController(cp.Component):
         if self.controller_heatpumpmode == "off":
             state = 0
         stsv.set_output_value(self.state_channel, state)
+        stsv.set_output_value(
+            self.applied_control_lower_temperature_channel,
+            self.applied_control_lower_temperature_in_celsius,
+        )
+        stsv.set_output_value(
+            self.applied_control_upper_temperature_channel,
+            self.applied_control_upper_temperature_in_celsius,
+        )
+        stsv.set_output_value(
+            self.control_running_mean_outdoor_temperature_48h_channel,
+            float(self.last_control_running_mean_outdoor_temperature_48h)
+            if self.last_control_running_mean_outdoor_temperature_48h is not None
+            else 0.0,
+        )
+        stsv.set_output_value(
+            self.control_heating_allowed_channel,
+            1 if self.last_control_heating_allowed else 0,
+        )
+        stsv.set_output_value(
+            self.control_cooling_allowed_channel,
+            1 if self.last_control_cooling_allowed else 0,
+        )
+
+    def strict_comfort_band_conditions(
+        self,
+        set_temperature: float,
+        heating_set_temperature: float,
+        cooling_set_temperature: float,
+        running_average_outside_temperature_48h: Optional[float],
+    ) -> None:
+        """Use inward-offset comfort bands with seasonal gating.
+
+        Heating:
+        - start when T < (comfort_lower + inner_offset)
+        - stop when T >= (comfort_upper - inner_offset)
+        - disabled entirely once running mean outdoor temperature > configured heating cutoff
+
+        Cooling:
+        - only allowed once running mean outdoor temperature > configured cooling cutoff
+        - start when T > (comfort_upper - inner_offset)
+        - stop when T <= (comfort_lower + inner_offset)
+        """
+
+        inner_offset = max(0.0, float(self.config.comfort_band_inner_offset_in_celsius))
+        strict_lower = heating_set_temperature + inner_offset
+        strict_upper = cooling_set_temperature - inner_offset
+        if strict_lower > strict_upper:
+            midpoint = 0.5 * (heating_set_temperature + cooling_set_temperature)
+            strict_lower = midpoint
+            strict_upper = midpoint
+        self.applied_control_lower_temperature_in_celsius = strict_lower
+        self.applied_control_upper_temperature_in_celsius = strict_upper
+
+        heating_allowed = True
+        cooling_allowed = False
+        if running_average_outside_temperature_48h is not None:
+            self.last_control_running_mean_outdoor_temperature_48h = running_average_outside_temperature_48h
+            heating_allowed = (
+                running_average_outside_temperature_48h
+                <= self.config.heating_disabled_above_running_mean_outdoor_temperature_in_celsius
+            )
+            cooling_allowed = (
+                running_average_outside_temperature_48h
+                > self.config.cooling_enabled_above_running_mean_outdoor_temperature_in_celsius
+            )
+        else:
+            self.last_control_running_mean_outdoor_temperature_48h = None
+
+        self.last_control_heating_allowed = heating_allowed
+        self.last_control_cooling_allowed = cooling_allowed
+
+        if self.controller_heatpumpmode == "heating":
+            if (not heating_allowed) or set_temperature >= strict_upper:
+                self.controller_heatpumpmode = "off"
+                return
+        if self.controller_heatpumpmode == "cooling":
+            if (not cooling_allowed) or set_temperature <= strict_lower:
+                self.controller_heatpumpmode = "off"
+                return
+        if self.controller_heatpumpmode == "off":
+            if heating_allowed and set_temperature < strict_lower:
+                self.controller_heatpumpmode = "heating"
+                return
+            if cooling_allowed and set_temperature > strict_upper:
+                self.controller_heatpumpmode = "cooling"
+                return
 
     def conditions(self, set_temperature: float, heating_set_temperature: float, cooling_set_temperature: float) -> None:
         """Set conditions for the heat pump controller mode."""
@@ -844,6 +1010,8 @@ class GenericHeatPumpController(cp.Component):
         minimum_heating_set_temperature = heating_set_temperature
         minimum_cooling_set_temperature = cooling_set_temperature - self.offset
         maximum_cooling_set_temperature = cooling_set_temperature
+        self.applied_control_lower_temperature_in_celsius = minimum_heating_set_temperature
+        self.applied_control_upper_temperature_in_celsius = maximum_cooling_set_temperature
 
         if self.controller_heatpumpmode == "heating":  # and daily_avg_temp < 15:
             if set_temperature > maximum_heating_set_temperature:  # 23
@@ -882,6 +1050,8 @@ class GenericHeatPumpController(cp.Component):
         minimum_cooling_set_temperature = cooling_set_temperature - self.offset
         # minimum_cooling_set_temp = self.t_set_cooling
         maximum_cooling_set_temperature = cooling_set_temperature
+        self.applied_control_lower_temperature_in_celsius = minimum_heating_set_temperature
+        self.applied_control_upper_temperature_in_celsius = maximum_cooling_set_temperature
 
         if self.controller_heatpumpmode == "heating":  # and daily_avg_temp < 15:
             if set_temperature > maximum_heating_set_temperature:  # 23

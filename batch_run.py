@@ -57,14 +57,18 @@ def _iter_matrix_runs(
 ) -> List[tuple[str, List[str]]]:
     runs: List[tuple[str, List[str]]] = []
     extra_overrides = extra_overrides or {}
-    override_args: List[str] = []
+    base_override_args: List[str] = []
     for k, v in extra_overrides.items():
         key = str(k).strip().upper()
         if not key:
             continue
-        override_args.append(f"{key}={str(v).strip()}")
+        base_override_args.append(f"{key}={str(v).strip()}")
+    run_counter = 0
     for arch in arch_values:
         for weather in weather_values:
+            run_counter += 1
+            explorer_override = f"BATCH_OPEN_EXPLORER={'1' if run_counter == 1 else '0'}"
+            override_args = [*base_override_args, explorer_override]
             name = f"{setup} ARCH={arch} WEATHER={weather}"
             if override_args:
                 name += " " + " ".join(override_args)
