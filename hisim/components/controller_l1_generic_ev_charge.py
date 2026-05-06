@@ -335,10 +335,14 @@ class L1Controller(cp.Component):
     def get_cost_capex(config: ChargingStationConfig, simulation_parameters: SimulationParameters) -> CapexCostDataClass:
         """Returns investment cost, CO2 emissions and lifetime."""
         seconds_per_year = 365 * 24 * 60 * 60
-        capex_per_simulated_period = (config.investment_costs_in_euro / config.lifetime) * (
+        lifetime_years = float(getattr(config, "lifetime_in_years", 0) or 0)
+        if lifetime_years <= 0:
+            lifetime_years = 1.0
+
+        capex_per_simulated_period = (config.investment_costs_in_euro / lifetime_years) * (
             simulation_parameters.duration.total_seconds() / seconds_per_year
         )
-        device_co2_footprint_per_simulated_period = (config.co2_footprint / config.lifetime) * (
+        device_co2_footprint_per_simulated_period = (config.device_co2_footprint_in_kg / lifetime_years) * (
             simulation_parameters.duration.total_seconds() / seconds_per_year
         )
 

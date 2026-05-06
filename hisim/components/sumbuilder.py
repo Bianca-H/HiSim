@@ -8,7 +8,7 @@ from dataclasses_json import dataclass_json
 
 from hisim import component as cp
 from hisim import loadtypes as lt
-from hisim.component import Component
+from hisim.component import CapexCostDataClass, Component, OpexCostDataClass
 from hisim.simulationparameters import SimulationParameters
 
 
@@ -59,7 +59,11 @@ class CalculateOperation(cp.Component):
         self.loadtype = config.loadtype
         self.unit = config.unit
         self.output1: cp.ComponentOutput = self.add_output(
-            self.component_name, self.Output, config.loadtype, config.unit
+            self.component_name,
+            self.Output,
+            config.loadtype,
+            config.unit,
+            output_description="Result of the configured mathematical operation(s) on the inputs.",
         )
 
     def add_numbered_input(self) -> cp.ComponentInput:
@@ -104,6 +108,10 @@ class CalculateOperation(cp.Component):
         """Restores the state."""
         pass
 
+    def i_prepare_simulation(self) -> None:
+        """Prepares the simulation (math helper component)."""
+        pass
+
     def i_doublecheck(self, timestep: int, stsv: cp.SingleTimeStepValues) -> None:
         """Double checks the results."""
         pass
@@ -126,6 +134,23 @@ class CalculateOperation(cp.Component):
             else:
                 raise Exception("Operation invalid!")
         stsv.set_output_value(self.output1, total)
+
+    def write_to_report(self) -> List[str]:
+        """Writes information to the report."""
+        return [f"CalculateOperation: {self.component_name} ({', '.join(self.operations) if self.operations else 'no-op'})"]
+
+    def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
+        """Return zero opex (math helper component)."""
+        return OpexCostDataClass.get_default_opex_cost_data_class()
+
+    @staticmethod
+    def get_cost_capex(config: cp.ConfigBase, simulation_parameters: SimulationParameters) -> CapexCostDataClass:  # noqa: ARG002
+        """Return zero capex (math helper component)."""
+        return CapexCostDataClass.get_default_capex_cost_data_class()
+
+    def get_component_kpi_entries(self, all_outputs: List, postprocessing_results) -> List:  # noqa: ARG002
+        """Return no KPIs (math helper component)."""
+        return []
 
 
 class SumBuilderForTwoInputs(Component):
@@ -203,6 +228,19 @@ class SumBuilderForTwoInputs(Component):
         lines.append(f"Input 2: {self.input2.fullname}")
         return lines
 
+    def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
+        """Return zero opex (math helper component)."""
+        return OpexCostDataClass.get_default_opex_cost_data_class()
+
+    @staticmethod
+    def get_cost_capex(config: cp.ConfigBase, simulation_parameters: SimulationParameters) -> CapexCostDataClass:  # noqa: ARG002
+        """Return zero capex (math helper component)."""
+        return CapexCostDataClass.get_default_capex_cost_data_class()
+
+    def get_component_kpi_entries(self, all_outputs: List, postprocessing_results) -> List:  # noqa: ARG002
+        """Return no KPIs (math helper component)."""
+        return []
+
 
 class SumBuilderForThreeInputs(Component):
     """Sum builder for three inputs."""
@@ -254,6 +292,7 @@ class SumBuilderForThreeInputs(Component):
             SumBuilderForThreeInputs.SumOutput,
             config.loadtype,
             config.unit,
+            output_description="Sum of three input values",
         )
 
         self.state = 0
@@ -271,9 +310,43 @@ class SumBuilderForThreeInputs(Component):
         """For double checking results."""
         pass
 
+    def i_prepare_simulation(self) -> None:
+        """Prepares the simulation (math helper component)."""
+        pass
+
     def i_simulate(self, timestep: int, stsv: cp.SingleTimeStepValues, force_convergence: bool) -> None:
         """Performs the addition of the values."""
         val1 = stsv.get_input_value(self.input1)
         val2 = stsv.get_input_value(self.input2)
         val3 = stsv.get_input_value(self.input3)
         stsv.set_output_value(self.output1, val1 + val2 + val3)
+
+    def write_to_report(self) -> List[str]:
+        """Writes information to the report."""
+        return [f"Sumbuilder for three inputs: {self.component_name}"]
+
+    def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
+        """Return zero opex (math helper component)."""
+        return OpexCostDataClass.get_default_opex_cost_data_class()
+
+    @staticmethod
+    def get_cost_capex(config: cp.ConfigBase, simulation_parameters: SimulationParameters) -> CapexCostDataClass:  # noqa: ARG002
+        """Return zero capex (math helper component)."""
+        return CapexCostDataClass.get_default_capex_cost_data_class()
+
+    def get_component_kpi_entries(self, all_outputs: List, postprocessing_results) -> List:  # noqa: ARG002
+        """Return no KPIs (math helper component)."""
+        return []
+
+    def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
+        """Return zero opex (math helper component)."""
+        return OpexCostDataClass.get_default_opex_cost_data_class()
+
+    @staticmethod
+    def get_cost_capex(config: cp.ConfigBase, simulation_parameters: SimulationParameters) -> CapexCostDataClass:  # noqa: ARG002
+        """Return zero capex (math helper component)."""
+        return CapexCostDataClass.get_default_capex_cost_data_class()
+
+    def get_component_kpi_entries(self, all_outputs: List, postprocessing_results) -> List:  # noqa: ARG002
+        """Return no KPIs (math helper component)."""
+        return []

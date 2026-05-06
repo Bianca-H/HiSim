@@ -2,12 +2,24 @@
   "mode": "commands",
   "commands": [
     {
-      "name": "baseline",
-      "cmd": "python ..\\hisim\\hisim_main.py basic_household ARCH=01_CH WEATHER=ZUESTA"
+      "name": "hp05",
+      "cmd": "python ../hisim/hisim_main.py hp05 ARCH=01_CH WEATHER=ZUESTA HEATGEN_SIZING=IDEAL_LOOKUP OCC=SIA2024 CAR_SCHEDULE=LPG HP_SHARE_OF_IDEAL=0.8"
     },
     {
-      "name": "alt_weather",
-      "cmd": "python ..\\hisim\\hisim_main.py basic_household ARCH=01_CH WEATHER=BASSTA"
+      "name": "bo01",
+      "cmd": "python ../hisim/hisim_main.py bo01 ARCH=01_CH WEATHER=ZUESTA HEATGEN_SIZING=IDEAL_LOOKUP"
+    },
+    {
+      "name": "bo02",
+      "cmd": "python ../hisim/hisim_main.py bo02 ARCH=01_CH WEATHER=ZUESTA HEATGEN_SIZING=IDEAL_LOOKUP"
+    },
+    {
+      "name": "bg01",
+      "cmd": "python ../hisim/hisim_main.py bg01 ARCH=01_CH WEATHER=ZUESTA HEATGEN_SIZING=IDEAL_LOOKUP"
+    },
+    {
+      "name": "bp01",
+      "cmd": "python ../hisim/hisim_main.py bp01 ARCH=01_CH WEATHER=ZUESTA HEATGEN_SIZING=IDEAL_LOOKUP"
     }
   ]
 }

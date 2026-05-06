@@ -24,6 +24,7 @@ from hisim.postprocessing.kpi_computation.kpi_structure import (
 )
 from hisim.simulationparameters import SimulationParameters
 from hisim.loadtypes import LoadTypes, Units
+from hisim import loadtypes as lt
 from hisim.components.weather import Weather
 from hisim.components.building import Building
 from hisim import utils
@@ -121,7 +122,32 @@ class AirConditionerConfig(ConfigBase):
             raise ValueError(
                 f"No installation cost information for type {air_conditioner['Type']}"
             )
-        self.cost = air_conditioner["Price"] + installation_cost
+
+        price_raw = air_conditioner.get("Price", 0.0)
+        price_eur: float
+        if isinstance(price_raw, str):
+            cleaned = (
+                price_raw.strip()
+                .replace("€", "")
+                .replace("EUR", "")
+                .replace(" ", "")
+                .replace("'", "")
+            )
+            if "," in cleaned and "." in cleaned:
+                # assume comma is thousands separator (e.g., "1,234.56")
+                cleaned = cleaned.replace(",", "")
+            else:
+                # assume comma is decimal separator (e.g., "1234,56")
+                cleaned = cleaned.replace(",", ".")
+            try:
+                price_eur = float(cleaned)
+            except ValueError:
+                log.warning(f"Could not parse AC price '{price_raw}'. Using 0 EUR.")
+                price_eur = 0.0
+        else:
+            price_eur = float(price_raw or 0.0)
+
+        self.cost = price_eur + float(installation_cost)
         self.maintenance_cost_as_percentage_of_investment = 0.05
         # Lifetime estimation:
         # 10 years https://www.deutschlandfunk.de/belastung-fuer-die-atmosphaere-der-vormarsch-der-100.html,
@@ -131,6 +157,13 @@ class AirConditionerConfig(ConfigBase):
         self.lifetime = 12
         self.co2_emissions_kg_co2_eq = (
             165.84  # In first step same as for heat pump
+        )
+
+        # Populate ConfigBase fields used by CAPEX/OPEX computations
+        self.investment_costs_in_euro = float(self.cost)
+        self.lifetime_in_years = int(self.lifetime)
+        self.maintenance_costs_in_euro_per_year = float(self.investment_costs_in_euro) * float(
+            self.maintenance_cost_as_percentage_of_investment
         )
 
     @classmethod
@@ -301,6 +334,10 @@ class AirConditioner(cp.Component):
             LoadTypes.ELECTRICITY,
             Units.WATT,
             output_description="Electrical power consumption",
+            postprocessing_flag=[
+                lt.InandOutputType.ELECTRICITY_CONSUMPTION_UNCONTROLLED,
+                lt.OutputPostprocessingRules.DISPLAY_IN_WEBTOOL,
+            ],
         )
         self.electrical_energy_consumption_channel = self.add_output(
             self.component_name,
@@ -308,6 +345,10 @@ class AirConditioner(cp.Component):
             LoadTypes.ELECTRICITY,
             Units.WATT_HOUR,
             output_description="Electrical energy consumption",
+            postprocessing_flag=[
+                lt.InandOutputType.ELECTRICITY_CONSUMPTION_UNCONTROLLED,
+                lt.OutputPostprocessingRules.DISPLAY_IN_WEBTOOL,
+            ],
         )
         self.efficiency = self.add_output(
             self.component_name,
@@ -775,6 +816,8 @@ class AirConditionerController(cp.Component):
     ElectricityInput = "ElectricityInput"
     OperatingState = "OperatingState"
     ModulatingPowerSignal = "ModulatingPowerSignal"
+    HeatingSetpoint = "HeatingSetpoint"
+    CoolingSetpoint = "CoolingSetpoint"
 
     @utils.measure_execution_time
     def __init__(
@@ -817,6 +860,23 @@ class AirConditionerController(cp.Component):
             LoadTypes.TEMPERATURE,
             Units.CELSIUS,
             True,
+        )
+
+        # Optional dynamic setpoints (e.g. from adaptive comfort controllers).
+        # If not connected, the controller falls back to the static config setpoints.
+        self.heating_setpoint_channel = self.add_input(
+            self.component_name,
+            self.HeatingSetpoint,
+            LoadTypes.TEMPERATURE,
+            Units.CELSIUS,
+            False,
+        )
+        self.cooling_setpoint_channel = self.add_input(
+            self.component_name,
+            self.CoolingSetpoint,
+            LoadTypes.TEMPERATURE,
+            Units.CELSIUS,
+            False,
         )
 
         self.operation_modulating_signal_channel = self.add_output(
@@ -916,11 +976,24 @@ class AirConditionerController(cp.Component):
             indoor_air_temperature_deg_c = stsv.get_input_value(
                 self.indoor_air_temperature_channel
             )
+            heating_setpoint = self.config.heating_set_temperature_deg_c
+            cooling_setpoint = self.config.cooling_set_temperature_deg_c
+            if self.heating_setpoint_channel.src_object_name is not None:
+                heating_setpoint = float(stsv.get_input_value(self.heating_setpoint_channel))
+            if self.cooling_setpoint_channel.src_object_name is not None:
+                cooling_setpoint = float(stsv.get_input_value(self.cooling_setpoint_channel))
+
             mode = self.determine_operating_mode(
-                indoor_air_temperature_deg_c, timestep
+                current_temperature_deg_c=indoor_air_temperature_deg_c,
+                timestep=timestep,
+                heating_setpoint=heating_setpoint,
+                cooling_setpoint=cooling_setpoint,
             )
             percentage = self.modulate_power(
-                indoor_air_temperature_deg_c, mode
+                current_temperature_deg_c=indoor_air_temperature_deg_c,
+                operating_mode=mode,
+                heating_setpoint=heating_setpoint,
+                cooling_setpoint=cooling_setpoint,
             )
 
             self.state.mode = mode
@@ -961,15 +1034,16 @@ class AirConditionerController(cp.Component):
         return None
 
     def determine_operating_mode(
-        self, current_temperature_deg_c: float, timestep: int
+        self,
+        current_temperature_deg_c: float,
+        timestep: int,
+        heating_setpoint: float,
+        cooling_setpoint: float,
     ) -> str:  # pylint: disable=too-many-return-statements
         """Controller takes action to maintain defined comfort range."""
         operating_time_compliant_state = self._check_minimum_operation_and_idle_time(timestep)
         if operating_time_compliant_state is not None:
             return operating_time_compliant_state
-
-        heating_setpoint = self.config.heating_set_temperature_deg_c
-        cooling_setpoint = self.config.cooling_set_temperature_deg_c
         offset = self.config.offset
 
         # Stay in heating if within heating deadband
@@ -1013,7 +1087,11 @@ class AirConditionerController(cp.Component):
         return "off"
 
     def modulate_power(
-        self, current_temperature_deg_c: float, operating_mode: str
+        self,
+        current_temperature_deg_c: float,
+        operating_mode: str,
+        heating_setpoint: float,
+        cooling_setpoint: float,
     ) -> float:
         """Power modulation.
 
@@ -1026,8 +1104,7 @@ class AirConditionerController(cp.Component):
         if operating_mode == "heating":
             temperature_difference = max(
                 (
-                    self.config.heating_set_temperature_deg_c
-                    + self.config.offset
+                    heating_setpoint + self.config.offset
                 )
                 - current_temperature_deg_c,
                 0,
@@ -1036,8 +1113,7 @@ class AirConditionerController(cp.Component):
             temperature_difference = max(
                 current_temperature_deg_c
                 - (
-                    self.config.cooling_set_temperature_deg_c
-                    - self.config.offset
+                    cooling_setpoint - self.config.offset
                 ),
                 0,
             )

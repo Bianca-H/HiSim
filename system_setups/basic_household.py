@@ -237,7 +237,7 @@ def setup_function(
     )
 
     # Build Heat Pump (optional: select model closest to ideal size from lookup)
-    sizing_mode = (cli_overrides.get_override("HEATGEN_SIZING") or "").strip().upper()
+    sizing_mode = (cli_overrides.get_override("HEATGEN_SIZING") or "IDEAL_LOOKUP").strip().upper()
     if sizing_mode == "IDEAL_LOOKUP":
         ideal_heating_power_in_watt = heating_system_selection.get_ideal_power_from_lookup(
             arch=arch_used, weather=weather_used

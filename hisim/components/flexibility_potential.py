@@ -249,22 +249,32 @@ class FlexibilityPotential(cp.Component):
         available_el_wh = max(0.0, pv_el_wh) + max(0.0, batt_el_wh) + max(0.0, ev_el_wh)
 
         # Derive device efficiencies from HVAC signals (if connected).
-        hvac_heat_w = float(stsv.get_input_value(self.hvac_heating_power_channel) or 0.0)
-        hvac_cool_w = float(stsv.get_input_value(self.hvac_cooling_power_channel) or 0.0)
+        # HVAC signals can be provided as signed thermal power:
+        # - heating: positive
+        # - cooling: often negative (e.g., heat pump / AC)
+        hvac_heat_w_raw = float(stsv.get_input_value(self.hvac_heating_power_channel) or 0.0)
+        hvac_cool_w_raw = float(stsv.get_input_value(self.hvac_cooling_power_channel) or 0.0)
         hvac_el_w = float(stsv.get_input_value(self.hvac_electric_power_channel) or 0.0)
+
+        hvac_heat_w = max(0.0, hvac_heat_w_raw)
+        # interpret negative signal as cooling magnitude
+        hvac_cool_w = max(0.0, hvac_cool_w_raw) if hvac_cool_w_raw >= 0.0 else max(0.0, -hvac_cool_w_raw)
 
         derived_heating_cop = 0.0
         derived_cooling_eer = 0.0
         if hvac_el_w > 1e-6:
-            derived_heating_cop = max(0.0, hvac_heat_w) / hvac_el_w
-            derived_cooling_eer = max(0.0, hvac_cool_w) / hvac_el_w
+            derived_heating_cop = hvac_heat_w / hvac_el_w
+            derived_cooling_eer = hvac_cool_w / hvac_el_w
 
         heating_cop = derived_heating_cop if derived_heating_cop > 0.0 else float(self.config.fallback_heating_cop)
         cooling_eer = derived_cooling_eer if derived_cooling_eer > 0.0 else float(self.config.fallback_cooling_eer)
 
         # Upper flexibility (as specified): add heat headroom + buffer remaining + convert available electricity to cooling energy.
         upper_from_heating_wh = max(0.0, pot_heat_wh)
-        upper_from_cooling_el_wh = max(0.0, available_el_wh * max(0.0, cooling_eer))
+        # Only count electricity->cooling conversion if cooling is enabled (indicated by non-zero cooling headroom).
+        upper_from_cooling_el_wh = (
+            max(0.0, available_el_wh * max(0.0, cooling_eer)) if pot_cool_wh > 0.0 else 0.0
+        )
         upper_total_wh = upper_from_heating_wh + max(0.0, buffer_remaining_wh) + upper_from_cooling_el_wh
 
         # Lower flexibility (as specified): remove heat (cooling headroom) + buffer stored + convert available electricity to heating energy.

@@ -456,10 +456,14 @@ class Car(cp.Component):
     def get_cost_capex(config: CarConfig, simulation_parameters: SimulationParameters) -> CapexCostDataClass:
         """Returns investment cost, CO2 emissions and lifetime."""
         seconds_per_year = 365 * 24 * 60 * 60
-        capex_per_simulated_period = (config.investment_costs_in_euro / config.lifetime) * (
+        lifetime_years = float(getattr(config, "lifetime_in_years", 0) or 0)
+        if lifetime_years <= 0:
+            lifetime_years = 1.0
+
+        capex_per_simulated_period = (config.investment_costs_in_euro / lifetime_years) * (
             simulation_parameters.duration.total_seconds() / seconds_per_year
         )
-        device_co2_footprint_per_simulated_period = (config.co2_footprint / config.lifetime) * (
+        device_co2_footprint_per_simulated_period = (config.device_co2_footprint_in_kg / lifetime_years) * (
             simulation_parameters.duration.total_seconds() / seconds_per_year
         )
 
@@ -565,7 +569,9 @@ class Car(cp.Component):
     def resample_meters_driven(self, meters_driven: List, seconds_per_timestep: int) -> Any:
         """Resample meters driven according to simulation time resolution."""
         # Convert seconds per timestep to minutes per timestep
-        minutes_per_timestep = seconds_per_timestep // 60
+        # `seconds_per_timestep` is often a float in system setups (e.g. 900.0).
+        # Floor-division would then yield a float (15.0), which breaks list slicing below.
+        minutes_per_timestep = int(seconds_per_timestep // 60)
 
         # Check the length of the input list
         total_minutes = len(meters_driven)

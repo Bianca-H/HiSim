@@ -212,9 +212,10 @@ opex_techno_economic_parameters = {
             "gas_costs_in_euro_per_kwh": 0.1559,  # average from [49] all actually in CHF
             "gas_footprint_in_kg_per_kwh": 0.23,  # [48]
             "oil_costs_in_euro_per_l": 1.1948,  # [49] all actually in CHF
-            "oil_footprint_in_kg_per_l": 0.324,  # [48]
+            # NOTE: must be kgCO2eq per liter (not per kWh). 0.324 kg/kWh would correspond to ~3.2 kg/l at ~9.8-10 kWh/l.
+            "oil_footprint_in_kg_per_l": 3.24,  # [48] corrected unit/decimal (was 0.324)
             "diesel_costs_in_euro_per_l": 2.0167,  # [49] average of 2025 values (up until September) [28]all actually in CHF
-            "diesel_footprint_in_kg_per_l": 0.324,  # [48] assumed as same as oil footprint as diesel is refined from oil
+            "diesel_footprint_in_kg_per_l": 3.24,  # [48] corrected unit/decimal (was 0.324)
             "pellet_costs_in_euro_per_t": 509.16,  # [49]all actually in CHF
             "pellet_footprint_in_kg_per_kwh": 0.028,  # [48]
             "wood_chip_costs_in_euro_per_t": 524.606695,  # [49] ratio pellet to wood chip costs in Austria applied to pellet costs in Switzerland all actually in CHF
@@ -231,9 +232,9 @@ opex_techno_economic_parameters = {
             "gas_costs_in_euro_per_kwh": 0.299,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
             "gas_footprint_in_kg_per_kwh": 0.23,  # [48]
             "oil_costs_in_euro_per_l": 1.485,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
-            "oil_footprint_in_kg_per_l": 0.324,  # [48]
+            "oil_footprint_in_kg_per_l": 3.24,  # [48] corrected unit/decimal (was 0.324)
             "diesel_costs_in_euro_per_l": 2.15,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
-            "diesel_footprint_in_kg_per_l": 0.324,  # [48]
+            "diesel_footprint_in_kg_per_l": 3.24,  # [48] corrected unit/decimal (was 0.324)
             "pellet_costs_in_euro_per_t": 568.8,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
             "pellet_footprint_in_kg_per_kwh": 0.028,  # [48]
             "wood_chip_costs_in_euro_per_t": 474,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
@@ -250,9 +251,9 @@ opex_techno_economic_parameters = {
             "gas_costs_in_euro_per_kwh": 0.566,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
             "gas_footprint_in_kg_per_kwh": 0.23,  # [48]
             "oil_costs_in_euro_per_l": 2.214,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
-            "oil_footprint_in_kg_per_l": 0.324,  # [48]
+            "oil_footprint_in_kg_per_l": 3.24,  # [48] corrected unit/decimal (was 0.324)
             "diesel_costs_in_euro_per_l": 2.19,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
-            "diesel_footprint_in_kg_per_l": 0.324,  # [48]
+            "diesel_footprint_in_kg_per_l": 3.24,  # [48] corrected unit/decimal (was 0.324)
             "pellet_costs_in_euro_per_t": 612,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx
             "pellet_footprint_in_kg_per_kwh": 0.028,  # [48]
             "wood_chip_costs_in_euro_per_t": 510,  # own calculation see Residential_Resilience\02_Literature\07_HiSim_Inputs\operational_costs_emissions\costs.xlsx

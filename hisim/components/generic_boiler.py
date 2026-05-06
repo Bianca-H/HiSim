@@ -841,6 +841,10 @@ class GenericBoiler(Component):
         postprocessing_results: pd.DataFrame,
     ) -> OpexCostDataClass:
         """Calculate OPEX costs, consisting of energy and maintenance costs."""
+        # Ensure the instance fuel selection is in sync with the config.
+        # This avoids accidental reuse of a stale cached `self.energy_carrier`.
+        self.energy_carrier = self.config.energy_carrier
+
         sh_consumption_in_kilowatt_hour = None
         dhw_consumption_in_kwh = None
         for index, output in enumerate(all_outputs):

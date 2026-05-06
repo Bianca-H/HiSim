@@ -91,6 +91,10 @@ class GenericHeatPumpControllerConfig(cp.ConfigBase):
     use_adaptive_comfort_band: bool
     control_strategy: str = "legacy"
     comfort_band_inner_offset_in_celsius: float = 0.5
+    # Optional separate inner offsets for strict comfort band.
+    # If unset, `comfort_band_inner_offset_in_celsius` is used for both bounds (backwards compatible).
+    comfort_band_inner_offset_lower_in_celsius: Optional[float] = None
+    comfort_band_inner_offset_upper_in_celsius: Optional[float] = None
     heating_disabled_above_running_mean_outdoor_temperature_in_celsius: float = 12.0
     cooling_enabled_above_running_mean_outdoor_temperature_in_celsius: float = 19.0
 
@@ -960,9 +964,19 @@ class GenericHeatPumpController(cp.Component):
         - stop when T <= (comfort_lower + inner_offset)
         """
 
-        inner_offset = max(0.0, float(self.config.comfort_band_inner_offset_in_celsius))
-        strict_lower = heating_set_temperature + inner_offset
-        strict_upper = cooling_set_temperature - inner_offset
+        base_offset = max(0.0, float(self.config.comfort_band_inner_offset_in_celsius))
+        lower_offset = (
+            max(0.0, float(self.config.comfort_band_inner_offset_lower_in_celsius))
+            if self.config.comfort_band_inner_offset_lower_in_celsius is not None
+            else base_offset
+        )
+        upper_offset = (
+            max(0.0, float(self.config.comfort_band_inner_offset_upper_in_celsius))
+            if self.config.comfort_band_inner_offset_upper_in_celsius is not None
+            else base_offset
+        )
+        strict_lower = heating_set_temperature + lower_offset
+        strict_upper = cooling_set_temperature - upper_offset
         if strict_lower > strict_upper:
             midpoint = 0.5 * (heating_set_temperature + cooling_set_temperature)
             strict_lower = midpoint
