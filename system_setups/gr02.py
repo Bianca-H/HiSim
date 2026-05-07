@@ -1,7 +1,7 @@
-"""BO01 household system setup (oil boiler + DHW + buffer tank, no cooling, no PV).
+"""GR02 household system setup (district heating + DHW + buffer tank + district cooling, no PV).
 
-This is based on `hp01`, but replaces the heat pump with a conventional oil boiler
-sized via the same ideal lookup sizing.
+This is based on `bo01`, but replaces the oil boiler with a district heating network
+(generic district heating component) sized via the same ideal lookup sizing.
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ from hisim.components import electricity_meter
 from hisim.components import flexibility_potential
 from hisim.components import heat_distribution_system
 from hisim.components import loadprofilegenerator_utsp_connector
-from hisim.components import generic_boiler
+from hisim.components import generic_district_heating
+from hisim.components import generic_district_cooling
+from hisim.components import comfort_band_cooling_demand
 from hisim.components import fuel_meter
 from hisim.components import simple_water_storage
 from hisim.components import sia2024_occupancy
@@ -29,11 +31,11 @@ from hisim.components import building
 
 
 def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationParameters] = None) -> None:  # noqa: too-many-statements
-    """Set up BO01.
+    """Set up GR02.
 
-    - Conventional oil boiler for space heating + DHW
+    - District heating network for space heating + DHW
     - Buffer tank (SimpleHotWaterStorage)
-    - No cooling (controller mode 1)
+    - District cooling network for space cooling
     - No PV
     - Keeps basic-household CLI overrides (ARCH/WEATHER, batch explorer suppression) and occupancy choice (SIA2024/LPG)
     """
@@ -136,8 +138,9 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # Ensure building demand is based on (at least) the comfort-lower level used in basic_household.
     # The adaptive comfort bounds are exposed as outputs, but the building demand setpoint is driven by these config values.
     my_building_config.set_heating_temperature_in_celsius = 20.5
-    # Prevent any cooling demand in BO01 (no cooling system in this variant).
-    my_building_config.set_cooling_temperature_in_celsius = 99.0
+    # Enable cooling demand in GR02 (district cooling provides it).
+    # Use a setpoint aligned with the strict comfort cooling baseline so the building actually requests cooling.
+    my_building_config.set_cooling_temperature_in_celsius = 24.0
 
     my_building_information = building.BuildingInformation(config=my_building_config)
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
@@ -170,7 +173,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         log.information("Using LPG/UTSP schedules (default). Set OCC=SIA2024 to switch.")
 
     # =============================================================================================================================
-    # Heat distribution, buffer tank, DHW storage, boiler, controllers
+    # Heat distribution, buffer tank, DHW storage, district heating, controllers
 
     # Heat Distribution Controller
     my_hds_controller_config = heat_distribution_system.HeatDistributionControllerConfig.get_default_heat_distribution_controller_config(
@@ -223,60 +226,63 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_simulation_parameters=my_simulation_parameters, config=my_dhw_storage_config
     )
 
-    # Oil boiler sizing (ideal lookup)
+    # District heating connected load sizing (ideal lookup)
     sizing_mode = (cli_overrides.get_override("HEATGEN_SIZING") or "IDEAL_LOOKUP").strip().upper()
     if sizing_mode == "IDEAL_LOOKUP":
         ideal_heating_power_in_watt = heating_system_selection.get_ideal_power_from_lookup(
             arch=arch_used, weather=weather_used
         )
-        boiler_power_w = float(ideal_heating_power_in_watt)
+        connected_load_w = float(ideal_heating_power_in_watt)
         log.information(
-            f"Using ideal lookup boiler sizing for ARCH={arch_used} WEATHER={weather_used}: "
-            f"ideal {boiler_power_w / 1e3:.2f} kW."
+            f"Using ideal lookup district heating sizing for ARCH={arch_used} WEATHER={weather_used}: "
+            f"ideal {connected_load_w / 1e3:.2f} kW."
         )
-        cli_overrides.set_used_value("BOILER_NOMINAL_POWER_W", str(int(round(boiler_power_w))))
+        cli_overrides.set_used_value("DISTRICT_HEATING_CONNECTED_LOAD_W", str(int(round(connected_load_w))))
     else:
-        boiler_power_w = float(my_building_information.max_thermal_building_demand_in_watt)
+        connected_load_w = float(my_building_information.max_thermal_building_demand_in_watt)
 
-    my_oil_boiler_config = generic_boiler.GenericBoilerConfig.get_scaled_conventional_oil_boiler_config(
-        heating_load_of_building_in_watt=boiler_power_w,
-        building_name="BUI1",
+    my_district_heating_controller_config = (
+        generic_district_heating.DistrictHeatingControllerConfig.get_default_district_heating_controller_config(
+            with_domestic_hot_water_preparation=True,
+            set_heating_threshold_outside_temperature_in_celsius=16.0,
+            parallel_space_heating_and_dhw_option=True,
+        )
     )
-    my_oil_boiler_config.name = "OilBoiler"
-    my_oil_boiler = generic_boiler.GenericBoiler(
+    my_district_heating_controller_config.name = "DistrictHeatingController"
+    my_district_heating_controller = generic_district_heating.DistrictHeatingController(
         my_simulation_parameters=my_simulation_parameters,
-        config=my_oil_boiler_config,
+        config=my_district_heating_controller_config,
     )
 
-    # Fuel meter (oil) for operational cost/emission postprocessing aggregation
+    my_district_heating_config = generic_district_heating.DistrictHeatingConfig.get_default_district_heating_config(
+        building_name="BUI1",
+        with_domestic_hot_water_preparation=True,
+        connected_load_w=float(connected_load_w),
+    )
+    my_district_heating_config.name = "DistrictHeating"
+    my_district_heating = generic_district_heating.DistrictHeating(
+        my_simulation_parameters=my_simulation_parameters,
+        config=my_district_heating_config,
+    )
+
+    # Fuel meter (district heating) for operational cost/emission postprocessing aggregation
     my_fuel_meter_config = fuel_meter.FuelMeterConfig.get_fuel_meter_default_config(
         building_name="BUI1",
-        fuel_loadtype=loadtypes.LoadTypes.OIL,
-        heating_value_of_fuel_in_kwh_per_liter=my_oil_boiler.heating_value_of_fuel_in_kwh_per_liter,
-        fuel_density_in_kg_per_m3=my_oil_boiler.fuel_density_in_kg_per_m3,
+        fuel_loadtype=loadtypes.LoadTypes.DISTRICTHEATING,
     )
     my_fuel_meter = fuel_meter.FuelMeter(
         my_simulation_parameters=my_simulation_parameters,
         config=my_fuel_meter_config,
     )
-    my_oil_boiler_controller_config = (
-        generic_boiler.GenericBoilerControllerConfig.get_default_modulating_generic_boiler_controller_config(
-            minimal_thermal_power_in_watt=my_oil_boiler_config.minimal_thermal_power_in_watt,
-            maximal_thermal_power_in_watt=my_oil_boiler_config.maximal_thermal_power_in_watt,
-            building_name="BUI1",
-            with_domestic_hot_water_preparation=True,
-            set_heating_threshold_outside_temperature_in_celsius=16.0,
-        )
-    )
-    my_oil_boiler_controller_config.name = "OilBoilerController"
-    my_oil_boiler_controller = generic_boiler.GenericBoilerController(
-        my_simulation_parameters=my_simulation_parameters,
-        config=my_oil_boiler_controller_config,
-    )
 
-    # Unified "total heat generator thermal power" output for postprocessing across HP/boiler variants.
+    # Unified "total heat generator thermal power" output for postprocessing across variants.
     # Column will be: `HeatGeneratorTotalThermalPower - Sum [Any - W]`
-    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForTwoInputs(
+    #
+    # GR02 adds district cooling, so we sum:
+    # - district heating SH
+    # - district heating DHW
+    # - district cooling (negative thermal power during cooling)
+    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForThreeInputs(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
             building_name="BUI1",
@@ -290,6 +296,41 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_electricity_meter = electricity_meter.ElectricityMeter(
         my_simulation_parameters=my_simulation_parameters,
         config=electricity_meter.ElectricityMeterConfig.get_electricity_meter_default_config(),
+    )
+
+    # District cooling (cooling-only), sized with the same connected load as district heating by default.
+    my_district_cooling_config = generic_district_cooling.DistrictCoolingConfig.get_default_config(
+        building_name="BUI1",
+        name="DistrictCooling",
+        connected_load_w=float(connected_load_w),
+    )
+    my_district_cooling = generic_district_cooling.DistrictCooling(
+        my_simulation_parameters=my_simulation_parameters,
+        config=my_district_cooling_config,
+    )
+
+    # Comfort-band cooling demand controller: derives cooling demand from operative temperature vs adaptive upper setpoint.
+    my_comfort_cooling_demand = comfort_band_cooling_demand.ComfortBandCoolingDemand(
+        my_simulation_parameters=my_simulation_parameters,
+        config=comfort_band_cooling_demand.ComfortBandCoolingDemandConfig.get_default_config(
+            building_name="BUI1",
+            name="ComfortBandCoolingDemand",
+            max_cooling_power_in_watt=float(connected_load_w),
+            proportional_gain_in_watt_per_kelvin=200000.0,
+            relaxation_factor=0.3,
+        ),
+    )
+
+    # Sum of heating (HDS) and cooling (district cooling) delivered to the building.
+    # District cooling power is negative, so summing works out-of-the-box.
+    my_thermal_power_sum = sumbuilder.SumBuilderForTwoInputs(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.SumBuilderConfig(
+            building_name="BUI1",
+            name="BuildingThermalPowerSum",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
     )
 
     # Strict comfort-band demand logic (same thermostat logic as in basic_household)
@@ -309,8 +350,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             comfort_band_inner_offset_lower_in_celsius=1.0,
             comfort_band_inner_offset_upper_in_celsius=0.5,
             heating_disabled_above_running_mean_outdoor_temperature_in_celsius=18.0,
-            # keep very high so strict controller never requests cooling
-            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=99.0,
+            # Match HP02/BO02: enable cooling when 48h running-mean outdoor temp is high enough
+            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=22.0,
         ),
         my_simulation_parameters=my_simulation_parameters,
     )
@@ -401,11 +442,45 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_setpoint_modifier.TemperatureModifier,
     )
 
-    # Building gets thermal power via HDS
-    my_building.connect_input(
-        my_building.ThermalPowerDelivered,
+    # Comfort-band driven cooling demand (adaptive upper setpoint)
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.OperativeTemperature,
+        my_building.component_name,
+        my_building.TemperatureOperative,
+    )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.UpperComfortSetpoint,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.AppliedControlUpperTemperature,
+    )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.CoolingAllowed,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.ControlCoolingAllowed,
+    )
+
+    # District cooling: driven by comfort-band demand (positive). Delivered power is negative.
+    my_district_cooling.connect_input(
+        my_district_cooling.CoolingDemand,
+        my_comfort_cooling_demand.component_name,
+        my_comfort_cooling_demand.CoolingDemand,
+    )
+
+    # Building gets net thermal power (heating + cooling) via sum builder
+    my_thermal_power_sum.connect_input(
+        my_thermal_power_sum.SumInput1,
         my_heat_distribution.component_name,
         my_heat_distribution.ThermalPowerDelivered,
+    )
+    my_thermal_power_sum.connect_input(
+        my_thermal_power_sum.SumInput2,
+        my_district_cooling.component_name,
+        my_district_cooling.ThermalOutputCoolingPower,
+    )
+    my_building.connect_input(
+        my_building.ThermalPowerDelivered,
+        my_thermal_power_sum.component_name,
+        my_thermal_power_sum.SumOutput,
     )
 
     # HeatDistributionController: connect weather by default; connect heating-only demand explicitly
@@ -420,23 +495,64 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_building, my_heat_distribution_controller, my_hot_water_storage
     )
 
-    # Oil boiler controller needs weather + storages + HDS controller (for target flow temperature)
-    my_oil_boiler_controller.connect_only_predefined_connections(
-        my_weather, my_hot_water_storage, my_dhw_storage, my_heat_distribution_controller
+    # District heating controller needs weather + HDS + HDS controller + DHW storage
+    my_district_heating_controller.connect_only_predefined_connections(
+        my_weather, my_heat_distribution, my_heat_distribution_controller, my_dhw_storage
     )
-    # Oil boiler connects to controller + storages
-    my_oil_boiler.connect_only_predefined_connections(my_oil_boiler_controller, my_hot_water_storage, my_dhw_storage)
+    # District heating connects to its controller
+    my_district_heating.connect_only_predefined_connections(my_district_heating_controller)
 
-    # Total thermal power (space heating + DHW)
+    # Buffer tank (space heating circuit): connect district heating outputs to storage
+    my_hot_water_storage.connect_input(
+        my_hot_water_storage.WaterTemperatureFromHeatGenerator,
+        my_district_heating.component_name,
+        my_district_heating.WaterOutputShTemperature,
+    )
+    my_hot_water_storage.connect_input(
+        my_hot_water_storage.WaterMassFlowRateFromHeatGenerator,
+        my_district_heating.component_name,
+        my_district_heating.WaterOutputShMassFlowRate,
+    )
+
+    # District heating space-heating inputs come from buffer tank (return temperature + mass flow)
+    my_district_heating.connect_input(
+        my_district_heating.WaterInputTemperatureSh,
+        my_hot_water_storage.component_name,
+        my_hot_water_storage.WaterTemperatureToHeatGenerator,
+    )
+    my_district_heating.connect_input(
+        my_district_heating.WaterInputMassFlowRateFromHeatDistributionSystem,
+        my_heat_distribution.component_name,
+        my_heat_distribution.WaterMassFlowHDS,
+    )
+
+    # District heating DHW inputs come from DHW storage
+    my_district_heating.connect_input(
+        my_district_heating.WaterInputTemperatureDhw,
+        my_dhw_storage.component_name,
+        my_dhw_storage.WaterTemperatureToHeatGenerator,
+    )
+    my_district_heating.connect_input(
+        my_district_heating.WaterInputMassFlowRateFromWarmWaterStorage,
+        my_dhw_storage.component_name,
+        my_dhw_storage.WaterMassFlowRateOfDHW,
+    )
+
+    # Total thermal power (space heating + DHW + district cooling)
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput1,
-        my_oil_boiler.component_name,
-        my_oil_boiler.ThermalPowerGenerationSh,
+        my_district_heating.component_name,
+        my_district_heating.ThermalOutputShPower,
     )
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput2,
-        my_oil_boiler.component_name,
-        my_oil_boiler.ThermalOutputPowerDhw,
+        my_district_heating.component_name,
+        my_district_heating.ThermalOutputDhwPower,
+    )
+    my_heatgen_total_thermal_power.connect_input(
+        my_heatgen_total_thermal_power.SumInput3,
+        my_district_cooling.component_name,
+        my_district_cooling.ThermalOutputCoolingPower,
     )
 
     # Buffer tank: explicit connections used by the HDS / boiler
@@ -445,28 +561,18 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_heat_distribution.component_name,
         my_heat_distribution.WaterTemperatureOutput,
     )
-    my_hot_water_storage.connect_input(
-        my_hot_water_storage.WaterTemperatureFromHeatGenerator,
-        my_oil_boiler.component_name,
-        my_oil_boiler.WaterOutputTemperatureSh,
-    )
-    my_hot_water_storage.connect_input(
-        my_hot_water_storage.WaterMassFlowRateFromHeatGenerator,
-        my_oil_boiler.component_name,
-        my_oil_boiler.WaterOutputMassFlowSh,
-    )
 
-    # DHW storage: connect occupancy (water draw) + boiler DHW outputs.
+    # DHW storage: connect occupancy (water draw) + district heating DHW outputs.
     # `SimpleDHWStorage` provides default connections for UTSP, but not for SIA2024, so we connect explicitly.
     my_dhw_storage.connect_input(
         my_dhw_storage.WaterTemperatureFromHeatGenerator,
-        my_oil_boiler.component_name,
-        my_oil_boiler.WaterOutputTemperatureDhw,
+        my_district_heating.component_name,
+        my_district_heating.WaterOutputDhwTemperature,
     )
     my_dhw_storage.connect_input(
         my_dhw_storage.WaterMassFlowRateFromHeatGenerator,
-        my_oil_boiler.component_name,
-        my_oil_boiler.WaterOutputMassFlowDhw,
+        my_district_heating.component_name,
+        my_district_heating.WaterOutputDhwMassFlowRate,
     )
     my_dhw_storage.connect_input(
         my_dhw_storage.WaterConsumption,
@@ -483,7 +589,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         source_tags=[loadtypes.InandOutputType.ELECTRICITY_CONSUMPTION_UNCONTROLLED],
         source_weight=999,
     )
-    # Oil boiler uses fuel; no additional electricity consumer is added here.
+    # District heating uses heat consumption; no additional electricity consumer is added here.
 
     # FlexibilityPotential connections
     my_flex_potential.connect_input(
@@ -513,8 +619,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
     my_flex_potential.connect_input(
         my_flex_potential.HvacHeatingPower,
-        my_oil_boiler.component_name,
-        my_oil_boiler.ThermalPowerGenerationSh,
+        my_district_heating.component_name,
+        my_district_heating.ThermalOutputShPower,
+    )
+    my_flex_potential.connect_input(
+        my_flex_potential.HvacCoolingPower,
+        my_district_cooling.component_name,
+        my_district_cooling.ThermalOutputCoolingPower,
     )
 
     # =============================================================================================================================
@@ -530,8 +641,11 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_hot_water_storage)
     my_sim.add_component(my_buffer_remaining)
     my_sim.add_component(my_dhw_storage)
-    my_sim.add_component(my_oil_boiler_controller)
-    my_sim.add_component(my_oil_boiler)
+    my_sim.add_component(my_district_heating_controller)
+    my_sim.add_component(my_district_heating)
+    my_sim.add_component(my_district_cooling)
+    my_sim.add_component(my_comfort_cooling_demand)
+    my_sim.add_component(my_thermal_power_sum)
     my_sim.add_component(my_fuel_meter, connect_automatically=True)
     my_sim.add_component(my_heatgen_total_thermal_power)
     my_sim.add_component(my_flex_potential)

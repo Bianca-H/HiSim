@@ -154,6 +154,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # =============================================================================================================================
     # Build Occupancy (SIA2024 or LPG/UTSP)
     occ_mode = (cli_overrides.get_override("OCC") or "SIA2024").strip().upper()
+    cli_overrides.set_used_value("OCC", occ_mode)
     if occ_mode == "SIA2024":
         floor_area_m2 = float(my_building_config.absolute_conditioned_floor_area_in_m2 or 0.0)
         sia_use_type = (cli_overrides.get_override("SIA_USE") or "residential").strip()
@@ -269,7 +270,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_car_batteries: list[advanced_ev_battery_bslib.CarBattery] = []
     my_car_battery_controllers: list[controller_l1_generic_ev_charge.L1Controller] = []
 
-    car_schedule_mode = (cli_overrides.get_override("CAR_SCHEDULE") or "").strip().upper()
+    car_schedule_mode = (cli_overrides.get_override("CAR_SCHEDULE") or "LPG").strip().upper()
+    cli_overrides.set_used_value("CAR_SCHEDULE", car_schedule_mode)
     # Supported:
     # - "" / "AUTO": use detailed LPG schedule only if available from main occupancy
     # - "LPG": always use detailed LPG mobility schedule (even when OCC=SIA2024)

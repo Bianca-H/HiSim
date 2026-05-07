@@ -147,6 +147,10 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # =============================================================================================================================
     # Build Occupancy (SIA2024 or LPG/UTSP)
     occ_mode = (cli_overrides.get_override("OCC") or "SIA2024").strip().upper()
+    cli_overrides.set_used_value("OCC", occ_mode)
+    # Default for batch runs (even if not used in this setup)
+    cli_overrides.set_used_value("CAR_SCHEDULE", (cli_overrides.get_override("CAR_SCHEDULE") or "LPG").strip().upper())
+    cli_overrides.set_used_value("HP_SHARE_OF_IDEAL", str(float(cli_overrides.get_override("HP_SHARE_OF_IDEAL") or 0.8)))
     if occ_mode == "SIA2024":
         floor_area_m2 = float(my_building_config.absolute_conditioned_floor_area_in_m2 or 0.0)
         sia_use_type = (cli_overrides.get_override("SIA_USE") or "residential").strip()

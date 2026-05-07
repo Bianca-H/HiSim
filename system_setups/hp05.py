@@ -147,6 +147,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # =============================================================================================================================
     # Occupancy
     occ_mode = (cli_overrides.get_override("OCC") or "SIA2024").strip().upper()
+    cli_overrides.set_used_value("OCC", occ_mode)
     if occ_mode == "SIA2024":
         floor_area_m2 = float(my_building_config.absolute_conditioned_floor_area_in_m2 or 0.0)
         sia_use_type = (cli_overrides.get_override("SIA_USE") or "residential").strip()
@@ -265,6 +266,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         )
         # HP05: intentionally undersize heat pump to 80% of ideal capacity
         hp_share_of_ideal = float(cli_overrides.get_override("HP_SHARE_OF_IDEAL") or 0.8)
+        cli_overrides.set_used_value("HP_SHARE_OF_IDEAL", str(hp_share_of_ideal))
         if hp_share_of_ideal <= 0 or hp_share_of_ideal > 1.0:
             hp_share_of_ideal = 0.8
         hp_target_power_in_watt = float(ideal_heating_power_in_watt) * hp_share_of_ideal
@@ -416,9 +418,9 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # Column will be: `HeatGeneratorTotalThermalPower - Sum [Any - W]`
     #
     # HP05 is a hybrid (HP + peak oil boiler), so we sum:
-    # - heat pump total (SH + DHW)
+    # - heat pump total (SH + DHW + cooling; cooling is negative)
     # - oil boiler SH
-    my_hp_total_thermal_power = sumbuilder.SumBuilderForTwoInputs(
+    my_hp_total_thermal_power = sumbuilder.SumBuilderForThreeInputs(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
             building_name="BUI1",
@@ -470,7 +472,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_car_batteries: list[advanced_ev_battery_bslib.CarBattery] = []
     my_car_battery_controllers: list[controller_l1_generic_ev_charge.L1Controller] = []
 
-    car_schedule_mode = (cli_overrides.get_override("CAR_SCHEDULE") or "").strip().upper()
+    car_schedule_mode = (cli_overrides.get_override("CAR_SCHEDULE") or "LPG").strip().upper()
+    cli_overrides.set_used_value("CAR_SCHEDULE", car_schedule_mode)
     # Supported:
     # - "" / "AUTO": use detailed LPG schedule only if available from main occupancy
     # - "LPG": always use detailed LPG mobility schedule (even when OCC=SIA2024)
@@ -667,7 +670,9 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_dhw_storage,
     )
 
-    # Total thermal power (space heating + DHW) from heat pump
+    # Total thermal power from heat pump:
+    # - SH + DHW (positive)
+    # - cooling output (negative, per `GenericHeatPump.Cooling`)
     my_hp_total_thermal_power.connect_input(
         my_hp_total_thermal_power.SumInput1,
         my_heatpump.component_name,
@@ -677,6 +682,12 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_hp_total_thermal_power.SumInput2,
         my_heatpump.component_name,
         my_heatpump.ThermalOutputPowerDHW,
+    )
+    # In HPLib HP, SH thermal output becomes negative during cooling mode (OnOffSwitchSH = -1).
+    my_hp_total_thermal_power.connect_input(
+        my_hp_total_thermal_power.SumInput3,
+        my_heatpump.component_name,
+        my_heatpump.ThermalOutputPowerSH,
     )
 
     if float(my_heatpump.parameters["Group"].iloc[0]) in (1.0, 4.0):

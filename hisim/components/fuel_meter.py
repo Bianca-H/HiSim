@@ -131,6 +131,7 @@ class FuelMeter(DynamicComponent):
         )
 
         self.add_dynamic_default_connections(self.get_default_connections_from_generic_district_heating())
+        self.add_dynamic_default_connections(self.get_default_connections_from_generic_district_cooling())
         self.add_dynamic_default_connections(self.get_default_connections_from_generic_boiler())
 
     def get_default_connections_from_generic_district_heating(
@@ -160,6 +161,30 @@ class FuelMeter(DynamicComponent):
                 source_component_class=DistrictHeating,
                 source_class_name=heat_source_class_name,
                 source_component_field_name=DistrictHeating.ThermalOutputDhwEnergy,
+                source_load_type=lt.LoadTypes.HEATING,
+                source_unit=lt.Units.WATT_HOUR,
+                source_tags=[
+                    lt.InandOutputType.HEAT_CONSUMPTION,
+                ],
+                source_weight=999,
+            )
+        )
+        return dynamic_connections
+
+    def get_default_connections_from_generic_district_cooling(
+        self,
+    ):
+        """Get generic district cooling default connections."""
+
+        from hisim.components.generic_district_cooling import DistrictCooling  # pylint: disable=import-outside-toplevel
+
+        dynamic_connections = []
+        source_class_name = DistrictCooling.get_classname()
+        dynamic_connections.append(
+            DynamicComponentConnection(
+                source_component_class=DistrictCooling,
+                source_class_name=source_class_name,
+                source_component_field_name=DistrictCooling.ThermalOutputCoolingEnergy,
                 source_load_type=lt.LoadTypes.HEATING,
                 source_unit=lt.Units.WATT_HOUR,
                 source_tags=[

@@ -54,6 +54,7 @@ def _iter_matrix_runs(
     arch_values: Iterable[str],
     weather_values: Iterable[str],
     extra_overrides: Optional[dict[str, Any]] = None,
+    start_index: int = 0,
 ) -> List[tuple[str, List[str]]]:
     runs: List[tuple[str, List[str]]] = []
     extra_overrides = extra_overrides or {}
@@ -63,7 +64,7 @@ def _iter_matrix_runs(
         if not key:
             continue
         base_override_args.append(f"{key}={str(v).strip()}")
-    run_counter = 0
+    run_counter = int(start_index)
     for arch in arch_values:
         for weather in weather_values:
             run_counter += 1
@@ -171,7 +172,7 @@ def _load_config(path: Path) -> dict:
 def _runs_from_config(cfg: dict, hisim_main: Path) -> List[tuple[str, List[str]]]:
     mode = str(cfg.get("mode") or "").strip().lower()
     if mode == "matrix":
-        setup = str(cfg["setup"])
+        setup_raw = cfg["setup"]
         arch_values = cfg.get("arch") or []
         weather_values = cfg.get("weather") or []
         extra_overrides = cfg.get("overrides") or {}
@@ -179,13 +180,29 @@ def _runs_from_config(cfg: dict, hisim_main: Path) -> List[tuple[str, List[str]]
             raise ValueError("Matrix mode needs non-empty `arch` and `weather` lists.")
         if extra_overrides is not None and not isinstance(extra_overrides, dict):
             raise TypeError("Matrix mode `overrides` must be a JSON object (dict).")
-        return _iter_matrix_runs(
-            hisim_main=hisim_main,
-            setup=setup,
-            arch_values=arch_values,
-            weather_values=weather_values,
-            extra_overrides=extra_overrides,
-        )
+        # `setup` can be a single string or a list of strings.
+        if isinstance(setup_raw, list):
+            setups = [str(x).strip() for x in setup_raw if str(x).strip()]
+        else:
+            setups = [str(setup_raw).strip()]
+        if not setups:
+            raise ValueError("Matrix mode needs non-empty `setup` (string or list of strings).")
+
+        runs: List[tuple[str, List[str]]] = []
+        # Ensure BATCH_OPEN_EXPLORER=1 only for the very first run across all setups.
+        run_index = 0
+        for setup in setups:
+            setup_runs = _iter_matrix_runs(
+                hisim_main=hisim_main,
+                setup=setup,
+                arch_values=arch_values,
+                weather_values=weather_values,
+                extra_overrides=extra_overrides,
+                start_index=run_index,
+            )
+            run_index += len(setup_runs)
+            runs.extend(setup_runs)
+        return runs
     if mode == "commands":
         commands = cfg.get("commands") or []
         if not commands:

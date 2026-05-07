@@ -37,7 +37,9 @@ def make_system_setup(
     The setup is simulated and result files are stored in `result_directory`.
     """
     if isinstance(parameters_json, list):
-        raise NotImplementedError("System Setup Starter can only handle one setup at a time for now.")
+        raise NotImplementedError(
+            "make_system_setup expects a single dict. Use make_system_setups for lists."
+        )
 
     _parameters_json = deepcopy(parameters_json)
     Path(result_directory).mkdir(parents=True, exist_ok=True)  # pylint: disable=unexpected-keyword-arg
@@ -80,6 +82,32 @@ def make_system_setup(
     )
 
 
+def make_system_setups(
+    parameters_json_list: list[dict],
+    result_directory: str,
+) -> list[Tuple[str, Optional[SimulationParameters], str]]:
+    """Build multiple system setups from a JSON list.
+
+    Each entry in `parameters_json_list` must be a dict compatible with `make_system_setup`.
+    Results are written into separate subfolders of `result_directory`.
+    """
+    runs: list[Tuple[str, Optional[SimulationParameters], str]] = []
+    base = Path(result_directory)
+    base.mkdir(parents=True, exist_ok=True)  # pylint: disable=unexpected-keyword-arg
+
+    for idx, entry in enumerate(parameters_json_list):
+        # Try to generate a stable subfolder name (prefer path stem, fallback to index)
+        try:
+            module_stem = Path(entry.get("path_to_module", "")).stem
+        except Exception:
+            module_stem = ""
+        subfolder = f"{idx:03d}_{module_stem}" if module_stem else f"{idx:03d}"
+        run_dir = str(base.joinpath(subfolder))
+        runs.append(make_system_setup(parameters_json=entry, result_directory=run_dir))
+
+    return runs
+
+
 if __name__ == "__main__":
     import sys
 
@@ -104,14 +132,23 @@ if __name__ == "__main__":
     with open(PARAMETERS_JSON_FILE, "r", encoding="utf8") as file:
         my_parameters_json: Union[dict, list] = json.load(file)
 
-    (
-        my_path_to_module,
-        my_simulation_parameters,
-        my_module_config,
-    ) = make_system_setup(parameters_json=my_parameters_json, result_directory=RESULT_DIRECTORY)
+    if isinstance(my_parameters_json, list):
+        runs = make_system_setups(parameters_json_list=my_parameters_json, result_directory=RESULT_DIRECTORY)
+        for my_path_to_module, my_simulation_parameters, my_module_config in runs:
+            main(
+                my_path_to_module,
+                my_simulation_parameters,
+                my_module_config,
+            )
+    else:
+        (
+            my_path_to_module,
+            my_simulation_parameters,
+            my_module_config,
+        ) = make_system_setup(parameters_json=my_parameters_json, result_directory=RESULT_DIRECTORY)
 
-    main(
-        my_path_to_module,
-        my_simulation_parameters,
-        my_module_config,
-    )
+        main(
+            my_path_to_module,
+            my_simulation_parameters,
+            my_module_config,
+        )
