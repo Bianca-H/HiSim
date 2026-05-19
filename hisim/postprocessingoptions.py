@@ -37,3 +37,7 @@ class PostProcessingOptions(IntEnum):
     WRITE_CONFIGS_FOR_SCENARIO_EVALUATION_TO_JSON = 28
     EXPORT_MONTHLY_RESULTS = 29
     EXPORT_RESULTS_IN_ONE_FILE = 30
+    #: Write only ``result_data_for_scenario_evaluation/data_for_scenario_evaluation.json`` (configs + run metadata).
+    #: When combined with :attr:`PREPARE_OUTPUTS_FOR_SCENARIO_EVALUATION`, skips hourly/daily/monthly/yearly CSV exports
+    #: in that folder to save disk space. Does not replace :attr:`EXPORT_TO_CSV` / :attr:`WRITE_KPIS_TO_JSON`.
+    WRITE_SCENARIO_EVALUATION_CONFIG_JSON = 31

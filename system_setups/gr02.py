@@ -46,7 +46,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     seconds_per_timestep = 900.0  # 15 min timesteps (3600s would be 1h, but can cause stability issues with large HP time constants)
 
     if my_simulation_parameters is None:
-        my_simulation_parameters = SimulationParameters.full_year_with_only_csv(
+        my_simulation_parameters = SimulationParameters.full_year_with_minimal_variant_artifacts(
             year=year, seconds_per_timestep=seconds_per_timestep
         )
 
@@ -238,8 +238,26 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             f"ideal {connected_load_w / 1e3:.2f} kW."
         )
         cli_overrides.set_used_value("DISTRICT_HEATING_CONNECTED_LOAD_W", str(int(round(connected_load_w))))
+        chosen_hp_for_cooling_cap = heating_system_selection.pick_heat_pump_closest_to_ideal(
+            ideal_power_in_watt=ideal_heating_power_in_watt
+        )
+        hp_nominal_for_cooling_w = float(chosen_hp_for_cooling_cap.nominal_heating_power_in_watt)
+        district_cooling_cap_w = heating_system_selection.get_cooling_plant_cap_from_hp_nominal(
+            hp_nominal_for_cooling_w
+        )
+        log.information(
+            f"District cooling cap {district_cooling_cap_w / 1e3:.2f} kW "
+            f"({heating_system_selection.DEFAULT_COOLING_PLANT_NOMINAL_FRACTION:.0%} of discrete HP nominal "
+            f"{hp_nominal_for_cooling_w / 1e3:.2f} kW, {chosen_hp_for_cooling_cap.manufacturer} / "
+            f"{chosen_hp_for_cooling_cap.name}, same sizing as HP02)."
+        )
+        cli_overrides.set_used_value("DISTRICT_COOLING_CAP_W", str(int(round(district_cooling_cap_w))))
+        cli_overrides.set_used_value("COOLING_PLANT_CAP_W", str(int(round(district_cooling_cap_w))))
     else:
         connected_load_w = float(my_building_information.max_thermal_building_demand_in_watt)
+        district_cooling_cap_w = heating_system_selection.get_cooling_plant_cap_from_hp_nominal(connected_load_w)
+        cli_overrides.set_used_value("DISTRICT_COOLING_CAP_W", str(int(round(district_cooling_cap_w))))
+        cli_overrides.set_used_value("COOLING_PLANT_CAP_W", str(int(round(district_cooling_cap_w))))
 
     my_district_heating_controller_config = (
         generic_district_heating.DistrictHeatingControllerConfig.get_default_district_heating_controller_config(
@@ -275,18 +293,34 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         config=my_fuel_meter_config,
     )
 
-    # Unified "total heat generator thermal power" output for postprocessing across variants.
-    # Column will be: `HeatGeneratorTotalThermalPower - Sum [Any - W]`
-    #
-    # GR02 adds district cooling, so we sum:
-    # - district heating SH
-    # - district heating DHW
-    # - district cooling (negative thermal power during cooling)
-    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForThreeInputs(
+    # KPI splits for postprocessing (aligned across HP/BO/BG/BP/GR setups):
+    # - `HeatGeneratorTotalThermalPower`: district SH + district cooling (negative during cooling); no DHW.
+    # - `HeatGeneratorPlantDhwThermalPower`: generator-side DHW (fossil / HP / district).
+    # - `SolarDhwThermalPower`: solar thermal into DHW (0 W here — no solar primary on DHW).
+    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForTwoInputs(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
             building_name="BUI1",
             name="HeatGeneratorTotalThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_heatgen_plant_dhw_thermal_power = sumbuilder.SumBuilderForOneInput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.SumBuilderConfig(
+            building_name="BUI1",
+            name="HeatGeneratorPlantDhwThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_solar_dhw_thermal_power = sumbuilder.ConstantThermalPowerOutput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.ConstantThermalPowerConfig(
+            building_name="BUI1",
+            name="SolarDhwThermalPower",
+            value_watt=0.0,
             loadtype=loadtypes.LoadTypes.ANY,
             unit=loadtypes.Units.WATT,
         ),
@@ -298,26 +332,30 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         config=electricity_meter.ElectricityMeterConfig.get_electricity_meter_default_config(),
     )
 
-    # District cooling (cooling-only), sized with the same connected load as district heating by default.
+    # District cooling (cooling-only): cap = fraction of discrete HP nominal (same IDEAL_LOOKUP sizing as HP02).
     my_district_cooling_config = generic_district_cooling.DistrictCoolingConfig.get_default_config(
         building_name="BUI1",
         name="DistrictCooling",
-        connected_load_w=float(connected_load_w),
+        connected_load_w=float(district_cooling_cap_w),
     )
     my_district_cooling = generic_district_cooling.DistrictCooling(
         my_simulation_parameters=my_simulation_parameters,
         config=my_district_cooling_config,
     )
 
-    # Comfort-band cooling demand controller: derives cooling demand from operative temperature vs adaptive upper setpoint.
+    # Comfort-band cooling demand (Layer B): cap/8 P-gain and higher relaxation — avoids pinning at plant cap.
+    cooling_p_gain = heating_system_selection.get_cooling_comfort_proportional_gain_w_per_k(
+        district_cooling_cap_w
+    )
     my_comfort_cooling_demand = comfort_band_cooling_demand.ComfortBandCoolingDemand(
         my_simulation_parameters=my_simulation_parameters,
         config=comfort_band_cooling_demand.ComfortBandCoolingDemandConfig.get_default_config(
             building_name="BUI1",
             name="ComfortBandCoolingDemand",
-            max_cooling_power_in_watt=float(connected_load_w),
-            proportional_gain_in_watt_per_kelvin=200000.0,
-            relaxation_factor=0.3,
+            max_cooling_power_in_watt=float(district_cooling_cap_w),
+            proportional_gain_in_watt_per_kelvin=cooling_p_gain,
+            relaxation_factor=heating_system_selection.DEFAULT_COOLING_COMFORT_RELAXATION_FACTOR,
+            theoretical_blend=heating_system_selection.DEFAULT_COOLING_THEORETICAL_BLEND,
         ),
     )
 
@@ -341,7 +379,6 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             temperature_air_heating_in_celsius=20.5,
             temperature_air_cooling_in_celsius=24.0,
             offset=0.5,
-            # Mode 2 supports heating/cooling/off, but strict strategy + thresholds below disables cooling in practice.
             mode=2,
             use_adaptive_comfort_band=True,
             control_strategy="strict_comfort_band_v1",
@@ -458,6 +495,11 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_strict_comfort_controller.component_name,
         my_strict_comfort_controller.ControlCoolingAllowed,
     )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.TheoreticalCoolingDemandFromBuilding,
+        my_building.component_name,
+        my_building.TheoreticalCoolingDemand,
+    )
 
     # District cooling: driven by comfort-band demand (positive). Delivered power is negative.
     my_district_cooling.connect_input(
@@ -538,7 +580,6 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_dhw_storage.WaterMassFlowRateOfDHW,
     )
 
-    # Total thermal power (space heating + DHW + district cooling)
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput1,
         my_district_heating.component_name,
@@ -546,13 +587,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput2,
-        my_district_heating.component_name,
-        my_district_heating.ThermalOutputDhwPower,
-    )
-    my_heatgen_total_thermal_power.connect_input(
-        my_heatgen_total_thermal_power.SumInput3,
         my_district_cooling.component_name,
         my_district_cooling.ThermalOutputCoolingPower,
+    )
+    my_heatgen_plant_dhw_thermal_power.connect_input(
+        my_heatgen_plant_dhw_thermal_power.SumInput1,
+        my_district_heating.component_name,
+        my_district_heating.ThermalOutputDhwPower,
     )
 
     # Buffer tank: explicit connections used by the HDS / boiler
@@ -648,5 +689,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_thermal_power_sum)
     my_sim.add_component(my_fuel_meter, connect_automatically=True)
     my_sim.add_component(my_heatgen_total_thermal_power)
+    my_sim.add_component(my_heatgen_plant_dhw_thermal_power)
+    my_sim.add_component(my_solar_dhw_thermal_power)
     my_sim.add_component(my_flex_potential)
 

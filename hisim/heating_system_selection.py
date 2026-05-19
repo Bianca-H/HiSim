@@ -95,6 +95,50 @@ def get_ideal_power_from_lookup(*, arch: str, weather: str, path: Optional[Path]
     return power_w
 
 
+# Fraction of discrete HP nominal used as max cooling plant power (split AC / district cooling).
+# Matches HP setups: same IDEAL_LOOKUP + pick_heat_pump_closest_to_ideal nominal, then scale down
+# because delivered HP cooling is typically well below catalogue/nominal (part load, cycling).
+DEFAULT_COOLING_PLANT_NOMINAL_FRACTION = 0.20
+
+
+def get_cooling_plant_cap_from_hp_nominal(
+    nominal_heating_power_in_watt: float,
+    nominal_fraction: float = DEFAULT_COOLING_PLANT_NOMINAL_FRACTION,
+) -> float:
+    """Max cooling plant power (W) from the same discrete HP nominal used in HP variants."""
+    nominal_w = float(nominal_heating_power_in_watt)
+    if nominal_w <= 0:
+        raise ValueError(f"nominal_heating_power_in_watt must be > 0, got {nominal_w}.")
+    fraction = float(nominal_fraction)
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"nominal_fraction must be in (0, 1], got {fraction}.")
+    return nominal_w * fraction
+
+
+# ComfortBandCoolingDemand tuning (Layer B): softer P-control so requests do not pin at cap.
+DEFAULT_COOLING_COMFORT_PROPORTIONAL_GAIN_DIVISOR = 10.0
+DEFAULT_COOLING_COMFORT_PROPORTIONAL_GAIN_FLOOR_W = 400.0
+DEFAULT_COOLING_COMFORT_RELAXATION_FACTOR = 0.55
+
+# Layer C: do not boost comfort P-control with full 5R1C theoretical cooling (pins plant at cap).
+DEFAULT_COOLING_THEORETICAL_BLEND = "comfort_only"
+
+
+def get_cooling_comfort_proportional_gain_w_per_k(
+    cooling_cap_w: float,
+    cap_divisor: float = DEFAULT_COOLING_COMFORT_PROPORTIONAL_GAIN_DIVISOR,
+    floor_w: float = DEFAULT_COOLING_COMFORT_PROPORTIONAL_GAIN_FLOOR_W,
+) -> float:
+    """P-gain (W/K) for comfort-band cooling: full cap at ~divisor K above upper setpoint."""
+    cap_w = float(cooling_cap_w)
+    if cap_w <= 0:
+        raise ValueError(f"cooling_cap_w must be > 0, got {cap_w}.")
+    divisor = float(cap_divisor)
+    if divisor <= 0:
+        raise ValueError(f"cap_divisor must be > 0, got {divisor}.")
+    return max(cap_w / divisor, float(floor_w))
+
+
 def _as_float(value: object) -> Optional[float]:
     try:
         if value is None:

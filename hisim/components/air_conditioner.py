@@ -227,7 +227,7 @@ class AirConditionerConfig(ConfigBase):
 
         # 0.6 was determined heuristically based on manually experimenting
         # with different scaling factors
-        scaling_factor = relevant_capacity_for_scaling * 0.6 / heating_load
+        scaling_factor = relevant_capacity_for_scaling * 0.2 / heating_load  #relevant_capacity_for_scaling * 0.6 / heating_load
 
         return cls(
             building_name=building_name,
@@ -248,6 +248,8 @@ class AirConditioner(cp.Component):
     GridImport = "GridImport"
     PV2load = "PV2load"
     Battery2Load = "Battery2Load"
+    # Optional positive cap (W) on delivered cooling magnitude (e.g. comfort-band demand), like demand-limited HP cooling.
+    CoolingPowerRequestLimit = "CoolingPowerRequestLimit"
     ThermalPowerDelivered = "ThermalPowerDelivered"
     ThermalEnergyDelivered = "ThermalEnergyDelivered"
     ElectricalPowerConsumption = "ElectricalPowerConsumption"
@@ -309,6 +311,13 @@ class AirConditioner(cp.Component):
             self.component_name,
             self.Battery2Load,
             LoadTypes.ELECTRICITY,
+            Units.WATT,
+            False,
+        )
+        self.cooling_power_request_limit_channel = self.add_input(
+            self.component_name,
+            self.CoolingPowerRequestLimit,
+            LoadTypes.COOLING,
             Units.WATT,
             False,
         )
@@ -553,6 +562,15 @@ class AirConditioner(cp.Component):
                 * self.config.scale_factor
                 * modulation_signal
             )
+            if self.cooling_power_request_limit_channel.source_output is not None:
+                limit_w = float(
+                    stsv.get_input_value(self.cooling_power_request_limit_channel)
+                    or 0.0
+                )
+                if limit_w >= 0.0 and thermal_power_delivered_w < 0.0:
+                    thermal_power_delivered_w = -min(
+                        abs(thermal_power_delivered_w), limit_w
+                    )
 
         electrical_power_consumption_w = (
             self._calculate_electricity_consumption(
@@ -737,6 +755,7 @@ class AirConditionerControllerConfig(ConfigBase):
     minimum_idle_time_s: float
     offset: float
     temperature_difference_full_power_deg_c: float
+    minimum_modulation: float = 0.1
 
     @classmethod
     def get_main_classname(cls):
@@ -758,6 +777,7 @@ class AirConditionerControllerConfig(ConfigBase):
             minimum_idle_time_s=15 * 60,
             offset=5.0,
             temperature_difference_full_power_deg_c=3.0,
+            minimum_modulation=0.1,
         )
 
 
@@ -818,6 +838,8 @@ class AirConditionerController(cp.Component):
     ModulatingPowerSignal = "ModulatingPowerSignal"
     HeatingSetpoint = "HeatingSetpoint"
     CoolingSetpoint = "CoolingSetpoint"
+    # Optional (e.g. from strict comfort): when <=0, never enter or hold cooling (winter / running-mean gate).
+    CoolingAllowed = "CoolingAllowed"
 
     @utils.measure_execution_time
     def __init__(
@@ -876,6 +898,13 @@ class AirConditionerController(cp.Component):
             self.CoolingSetpoint,
             LoadTypes.TEMPERATURE,
             Units.CELSIUS,
+            False,
+        )
+        self.cooling_allowed_channel = self.add_input(
+            self.component_name,
+            self.CoolingAllowed,
+            LoadTypes.ANY,
+            Units.ANY,
             False,
         )
 
@@ -983,11 +1012,18 @@ class AirConditionerController(cp.Component):
             if self.cooling_setpoint_channel.src_object_name is not None:
                 cooling_setpoint = float(stsv.get_input_value(self.cooling_setpoint_channel))
 
+            cooling_allowed = True
+            if self.cooling_allowed_channel.src_object_name is not None:
+                raw_ca = stsv.get_input_value(self.cooling_allowed_channel)
+                if raw_ca is not None:
+                    cooling_allowed = float(raw_ca) > 0.0
+
             mode = self.determine_operating_mode(
                 current_temperature_deg_c=indoor_air_temperature_deg_c,
                 timestep=timestep,
                 heating_setpoint=heating_setpoint,
                 cooling_setpoint=cooling_setpoint,
+                cooling_allowed=cooling_allowed,
             )
             percentage = self.modulate_power(
                 current_temperature_deg_c=indoor_air_temperature_deg_c,
@@ -1039,11 +1075,18 @@ class AirConditionerController(cp.Component):
         timestep: int,
         heating_setpoint: float,
         cooling_setpoint: float,
+        *,
+        cooling_allowed: bool = True,
     ) -> str:  # pylint: disable=too-many-return-statements
         """Controller takes action to maintain defined comfort range."""
         operating_time_compliant_state = self._check_minimum_operation_and_idle_time(timestep)
         if operating_time_compliant_state is not None:
-            return operating_time_compliant_state
+            if operating_time_compliant_state == "cooling" and not cooling_allowed:
+                if self.state.mode == "cooling":
+                    self.state.deactivate(timestep)
+                # Do not honour minimum-runtime hold in cooling when cooling is disallowed.
+            else:
+                return operating_time_compliant_state
         offset = self.config.offset
 
         # Stay in heating if within heating deadband
@@ -1056,22 +1099,23 @@ class AirConditionerController(cp.Component):
             return "heating"
 
         # Stay in cooling if within cooling deadband
-        if (
-            self.state.mode == "cooling"
-            or self.processed_state.mode == "cooling"
-        ) and current_temperature_deg_c > cooling_setpoint - offset:
-            if self.state.mode != "cooling":
-                self.state.activate_cooling(timestep)
-            return "cooling"
+        if cooling_allowed:
+            if (
+                self.state.mode == "cooling"
+                or self.processed_state.mode == "cooling"
+            ) and current_temperature_deg_c > cooling_setpoint - offset:
+                if self.state.mode != "cooling":
+                    self.state.activate_cooling(timestep)
+                return "cooling"
 
-        # Switch to cooling if temperature exceeds upper cooling threshold (and previously not heating)
-        if current_temperature_deg_c > cooling_setpoint and (
-            self.state.mode != "heating"
-            and self.processed_state.mode != "heating"
-        ):
-            if self.state.mode != "cooling":
-                self.state.activate_cooling(timestep)
-            return "cooling"
+            # Switch to cooling if temperature exceeds upper cooling threshold (and previously not heating)
+            if current_temperature_deg_c > cooling_setpoint and (
+                self.state.mode != "heating"
+                and self.processed_state.mode != "heating"
+            ):
+                if self.state.mode != "cooling":
+                    self.state.activate_cooling(timestep)
+                return "cooling"
 
         # Switch to heating if temperature drops below lower heating threshold (and previously not cooling)
         if current_temperature_deg_c < heating_setpoint and (
@@ -1126,6 +1170,8 @@ class AirConditionerController(cp.Component):
             / self.config.temperature_difference_full_power_deg_c,
             1.0,
         )
-        percentage = float(max(1 - (1 - capped_ratio) ** 2, 0.1))
+        min_mod = float(getattr(self.config, "minimum_modulation", 0.1) or 0.0)
+        min_mod = max(0.0, min(min_mod, 1.0))
+        percentage = float(max(1 - (1 - capped_ratio) ** 2, min_mod))
 
         return percentage

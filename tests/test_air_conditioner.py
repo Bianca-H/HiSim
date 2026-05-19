@@ -41,7 +41,10 @@ def test_determine_mode_returns_correct_operation_mode_for_temperature(
 
     """ WHEN """
     returned_mode = testee.determine_operating_mode(
-        current_temperature_deg_c, 0
+        current_temperature_deg_c,
+        0,
+        testee.config.heating_set_temperature_deg_c,
+        testee.config.cooling_set_temperature_deg_c,
     )
 
     """ THEN """
@@ -93,11 +96,29 @@ def test_determine_mode_returns_correct_operation_mode_for_operating_time(
 
     """ WHEN """
     returned_mode = testee.determine_operating_mode(
-        current_temperature_deg_c, 0
+        current_temperature_deg_c,
+        0,
+        testee.config.heating_set_temperature_deg_c,
+        testee.config.cooling_set_temperature_deg_c,
     )
 
     """ THEN """
     assert returned_mode == expected_mode
+
+
+@pytest.mark.base
+def test_determine_mode_never_cools_when_cooling_disallowed():
+    """When cooling_allowed is False, high indoor temperature must not select cooling (strict winter gate)."""
+    testee = given_default_testee()
+    testee.previous_state = AirConditionerControllerState("off", 0, 0, 0.0)
+    mode = testee.determine_operating_mode(
+        40.0,
+        0,
+        testee.config.heating_set_temperature_deg_c,
+        testee.config.cooling_set_temperature_deg_c,
+        cooling_allowed=False,
+    )
+    assert mode != "cooling"
 
 
 @pytest.mark.base
@@ -132,7 +153,10 @@ def test_modulate_returns_correct_modulation_percentage(
 
     """ WHEN """
     modulating_percentage = testee.modulate_power(
-        current_temperature_deg_c, operating_mode
+        current_temperature_deg_c,
+        operating_mode,
+        testee.config.heating_set_temperature_deg_c,
+        testee.config.cooling_set_temperature_deg_c,
     )
 
     """ THEN """

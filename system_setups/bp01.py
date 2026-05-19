@@ -1,7 +1,12 @@
-"""BP01 household system setup (pellet boiler + DHW + buffer tank, no cooling, no PV).
+"""BP10 household system setup (pellet boiler + DHW + buffer + solar thermal, no PV, no cooling).
 
-This is based on `bo01`, but replaces the oil boiler with a conventional pellet boiler
-sized via the same ideal lookup sizing.
+Pellet + solar DHW behaviour (typical plant representation):
+- **Long minimum run / rest** on the boiler controller: once lit, the pellet cannot be cut off until the minimum
+  run time has elapsed; it may **modulate down** (not only full load). Between cycles, minimum rest applies.
+- **Winter** (daily mean outdoor temperature below the seasonal threshold): modulation **floor** at **1/12 of
+  nominal** thermal power — typical minimum stable load while the burner is on.
+- **Summer** (warm daily mean): modulation floor **0** on the controller, and **plant** `minimal_thermal_power_in_watt = 0`
+  on the boiler so the pellet can stay **off** for long stretches when **solar thermal** covers DHW.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from typing import Any, Optional
 from hisim import cli_overrides, heating_system_selection, loadtypes, log
 from hisim.postprocessingoptions import PostProcessingOptions
 from hisim.simulator import SimulationParameters
+from hisim.component import Coordinates
 
 from hisim.components import electricity_meter
 from hisim.components import flexibility_potential
@@ -23,20 +29,14 @@ from hisim.components import sia2024_occupancy
 from hisim.components import generic_heat_pump
 from hisim.components import strict_comfort_recovery_modifier
 from hisim.components import buffer_remaining_capacity
+from hisim.components import solar_thermal_system
 from hisim.components import sumbuilder
 from hisim.components import weather
 from hisim.components import building
 
 
 def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationParameters] = None) -> None:  # noqa: too-many-statements
-    """Set up BP01.
-
-    - Conventional pellet boiler for space heating + DHW
-    - Buffer tank (SimpleHotWaterStorage)
-    - No cooling (controller mode 1)
-    - No PV
-    - Keeps basic-household CLI overrides (ARCH/WEATHER, batch explorer suppression) and occupancy choice (SIA2024/LPG)
-    """
+    """Set up BP10 (BP01 + solar DHW on primary DHW path, pellet secondary; no PV)."""
 
     # =============================================================================================================================
     # Set simulation parameters
@@ -44,7 +44,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     seconds_per_timestep = 900.0  # 15 min timesteps (3600s would be 1h, but can cause stability issues with large HP time constants)
 
     if my_simulation_parameters is None:
-        my_simulation_parameters = SimulationParameters.full_year_with_only_csv(
+        my_simulation_parameters = SimulationParameters.full_year_with_minimal_variant_artifacts(
             year=year, seconds_per_timestep=seconds_per_timestep
         )
 
@@ -99,6 +99,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             cli_overrides.set_used_value("WEATHER", weather_used)
     my_weather = weather.Weather(config=my_weather_config, my_simulation_parameters=my_simulation_parameters)
 
+    if my_weather_config.latitude is None or my_weather_config.longitude is None:
+        solar_site_latitude = 47.37759
+        solar_site_longitude = 8.530352
+    else:
+        solar_site_latitude = float(my_weather_config.latitude)
+        solar_site_longitude = float(my_weather_config.longitude)
+
     # =============================================================================================================================
     # Build Building (with ARCH override + location-dependent heating reference temperature mapping)
     my_building_config = cli_overrides.apply_building_archetype_override(
@@ -136,11 +143,19 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # Ensure building demand is based on (at least) the comfort-lower level used in basic_household.
     # The adaptive comfort bounds are exposed as outputs, but the building demand setpoint is driven by these config values.
     my_building_config.set_heating_temperature_in_celsius = 20.5
-    # Prevent any cooling demand in BP01 (no cooling system in this variant).
+    # Prevent any cooling demand in BP10 (no cooling system in this variant).
     my_building_config.set_cooling_temperature_in_celsius = 99.0
 
     my_building_information = building.BuildingInformation(config=my_building_config)
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
+
+    roof_area_m2 = float(my_building_information.roof_area_in_m2 or 0.0)
+    solar_thermal_area_m2 = float((cli_overrides.get_override("SOLAR_THERMAL_AREA_M2") or "12.0").strip())
+    solar_thermal_area_m2 = max(0.0, min(solar_thermal_area_m2, max(0.0, roof_area_m2 - 1.0)))
+    log.information(
+        f"BP10 roof: total roof {roof_area_m2:.1f} m2, solar thermal collector area {solar_thermal_area_m2:.1f} m2 (no PV)."
+    )
+    cli_overrides.set_used_value("SOLAR_THERMAL_AREA_M2", str(int(round(solar_thermal_area_m2))))
 
     # =============================================================================================================================
     # Build Occupancy (SIA2024 or LPG/UTSP)
@@ -223,6 +238,30 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_simulation_parameters=my_simulation_parameters, config=my_dhw_storage_config
     )
 
+    # --- BP10: Solar thermal as primary DHW heat generator (pellet on secondary circuit) ---
+    my_solar_thermal_system_config = solar_thermal_system.SolarThermalSystemConfig.get_default_solar_thermal_system(
+        building_name="BUI1",
+        coordinates=Coordinates(latitude=solar_site_latitude, longitude=solar_site_longitude),
+        area_m2=solar_thermal_area_m2,
+    )
+    my_solar_thermal_system_config.name = "SolarThermalDHW_BP10"
+    my_solar_thermal_system = solar_thermal_system.SolarThermalSystem(
+        config=my_solar_thermal_system_config,
+        my_simulation_parameters=my_simulation_parameters,
+    )
+    my_solar_thermal_system_controller_config = (
+        solar_thermal_system.SolarThermalSystemControllerConfig.get_solar_thermal_system_controller_config()
+    )
+    my_solar_thermal_system_controller_config.name = "SolarThermalSystemController_BP10"
+    my_solar_thermal_system_controller = solar_thermal_system.SolarThermalSystemController(
+        my_simulation_parameters=my_simulation_parameters,
+        config=my_solar_thermal_system_controller_config,
+    )
+    my_solar_thermal_system.connect_only_predefined_connections(
+        my_weather, my_dhw_storage, my_solar_thermal_system_controller
+    )
+    my_solar_thermal_system_controller.connect_only_predefined_connections(my_dhw_storage, my_solar_thermal_system)
+
     # Pellet boiler sizing (ideal lookup)
     sizing_mode = (cli_overrides.get_override("HEATGEN_SIZING") or "IDEAL_LOOKUP").strip().upper()
     if sizing_mode == "IDEAL_LOOKUP":
@@ -245,6 +284,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_oil_boiler_config.name = "PelletBoiler"
     # Be explicit: ensure OPEX/CO2 use pellet factors.
     my_oil_boiler_config.energy_carrier = loadtypes.LoadTypes.PELLETS
+    # BP10: allow true thermal off at low modulation (solar can cover DHW in summer).
+    my_oil_boiler_config.minimal_thermal_power_in_watt = 0.0
     my_oil_boiler = generic_boiler.GenericBoiler(
         my_simulation_parameters=my_simulation_parameters,
         config=my_oil_boiler_config,
@@ -268,21 +309,52 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             building_name="BUI1",
             with_domestic_hot_water_preparation=True,
             set_heating_threshold_outside_temperature_in_celsius=16.0,
+            secondary_mode=True,
         )
     )
+    # Typical pellet boiler controller: long min run/rest; winter modulation floor 1/12 while on; summer floor 0
+    # so the boiler can remain off when solar carries DHW (see module docstring).
+    my_oil_boiler_controller_config.seasonal_modulation_minimum_enabled = True
+    my_oil_boiler_controller_config.winter_modulation_minimum_thermal_power_in_watt = (
+        my_oil_boiler_config.maximal_thermal_power_in_watt / 60.0
+    )
+    my_oil_boiler_controller_config.summer_modulation_minimum_thermal_power_in_watt = 0.0
+    my_oil_boiler_controller_config.summer_modulation_daily_avg_outdoor_temperature_threshold_celsius = 16.0
+    my_oil_boiler_controller_config.minimum_runtime_in_seconds = 120.0 * 60.0  # 2 h — pellet cannot stop mid-cycle earlier
+    my_oil_boiler_controller_config.minimum_resting_time_in_seconds = 90.0 * 60.0  # 1.5 h between firing cycles
     my_oil_boiler_controller_config.name = "PelletBoilerController"
     my_oil_boiler_controller = generic_boiler.GenericBoilerController(
         my_simulation_parameters=my_simulation_parameters,
         config=my_oil_boiler_controller_config,
     )
 
-    # Unified "total heat generator thermal power" output for postprocessing across HP/boiler variants.
-    # Column will be: `HeatGeneratorTotalThermalPower - Sum [Any - W]`
-    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForTwoInputs(
+    # KPI splits for postprocessing (aligned across HP/BO/BG/BP/GR setups):
+    # - `HeatGeneratorTotalThermalPower`: space heating only (pellet SH).
+    # - `HeatGeneratorPlantDhwThermalPower`: generator-side DHW from the pellet boiler (`ThermalOutputPowerDhw`).
+    # - `SolarDhwThermalPower`: solar thermal delivered into the DHW store (primary heat generator path).
+    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForOneInput(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
             building_name="BUI1",
             name="HeatGeneratorTotalThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_heatgen_plant_dhw_thermal_power = sumbuilder.SumBuilderForOneInput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.SumBuilderConfig(
+            building_name="BUI1",
+            name="HeatGeneratorPlantDhwThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_solar_dhw_thermal_power = sumbuilder.SumBuilderForOneInput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.SumBuilderConfig(
+            building_name="BUI1",
+            name="SolarDhwThermalPower",
             loadtype=loadtypes.LoadTypes.ANY,
             unit=loadtypes.Units.WATT,
         ),
@@ -411,7 +483,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
 
     # HeatDistributionController: connect weather by default; connect heating-only demand explicitly
-    # so no cooling mode is considered in BP01.
+    # so no cooling mode is considered in BP10.
     my_heat_distribution_controller.connect_only_predefined_connections(my_weather)
     my_heat_distribution_controller.connect_input(
         my_heat_distribution_controller.TheoreticalThermalBuildingDemand,
@@ -429,16 +501,20 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # Oil boiler connects to controller + storages
     my_oil_boiler.connect_only_predefined_connections(my_oil_boiler_controller, my_hot_water_storage, my_dhw_storage)
 
-    # Total thermal power (space heating + DHW)
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput1,
         my_oil_boiler.component_name,
         my_oil_boiler.ThermalPowerGenerationSh,
     )
-    my_heatgen_total_thermal_power.connect_input(
-        my_heatgen_total_thermal_power.SumInput2,
+    my_heatgen_plant_dhw_thermal_power.connect_input(
+        my_heatgen_plant_dhw_thermal_power.SumInput1,
         my_oil_boiler.component_name,
         my_oil_boiler.ThermalOutputPowerDhw,
+    )
+    my_solar_dhw_thermal_power.connect_input(
+        my_solar_dhw_thermal_power.SumInput1,
+        my_dhw_storage.component_name,
+        my_dhw_storage.ThermalPowerFromHeatGenerator,
     )
 
     # Buffer tank: explicit connections used by the HDS / boiler
@@ -458,15 +534,24 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_oil_boiler.WaterOutputMassFlowSh,
     )
 
-    # DHW storage: connect occupancy (water draw) + boiler DHW outputs.
-    # `SimpleDHWStorage` provides default connections for UTSP, but not for SIA2024, so we connect explicitly.
+    # DHW storage: solar primary, pellet secondary; occupancy water draw.
     my_dhw_storage.connect_input(
         my_dhw_storage.WaterTemperatureFromHeatGenerator,
+        my_solar_thermal_system.component_name,
+        my_solar_thermal_system.WaterTemperatureOutput,
+    )
+    my_dhw_storage.connect_input(
+        my_dhw_storage.WaterMassFlowRateFromHeatGenerator,
+        my_solar_thermal_system.component_name,
+        my_solar_thermal_system.WaterMassFlowOutput,
+    )
+    my_dhw_storage.connect_input(
+        my_dhw_storage.WaterTemperatureFromSecondaryHeatGenerator,
         my_oil_boiler.component_name,
         my_oil_boiler.WaterOutputTemperatureDhw,
     )
     my_dhw_storage.connect_input(
-        my_dhw_storage.WaterMassFlowRateFromHeatGenerator,
+        my_dhw_storage.WaterMassFlowRateFromSecondaryHeatGenerator,
         my_oil_boiler.component_name,
         my_oil_boiler.WaterOutputMassFlowDhw,
     )
@@ -476,7 +561,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_occupancy.WaterConsumption,
     )
 
-    # Electricity grid aggregation (no PV)
+    # Electricity grid aggregation (occupancy, solar thermal pump; no PV in this variant)
     my_electricity_meter.add_component_input_and_connect(
         source_object_name=my_occupancy.component_name,
         source_component_output=my_occupancy.ElectricalPowerConsumption,
@@ -485,7 +570,14 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         source_tags=[loadtypes.InandOutputType.ELECTRICITY_CONSUMPTION_UNCONTROLLED],
         source_weight=999,
     )
-    # Oil boiler uses fuel; no additional electricity consumer is added here.
+    my_electricity_meter.add_component_input_and_connect(
+        source_object_name=my_solar_thermal_system.component_name,
+        source_component_output=my_solar_thermal_system.ElectricityConsumptionOutput,
+        source_load_type=loadtypes.LoadTypes.ELECTRICITY,
+        source_unit=loadtypes.Units.WATT,
+        source_tags=[loadtypes.InandOutputType.ELECTRICITY_CONSUMPTION_UNCONTROLLED],
+        source_weight=999,
+    )
 
     # FlexibilityPotential connections
     my_flex_potential.connect_input(
@@ -532,9 +624,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_hot_water_storage)
     my_sim.add_component(my_buffer_remaining)
     my_sim.add_component(my_dhw_storage)
+    my_sim.add_component(my_solar_thermal_system)
+    my_sim.add_component(my_solar_thermal_system_controller)
     my_sim.add_component(my_oil_boiler_controller)
     my_sim.add_component(my_oil_boiler)
     my_sim.add_component(my_fuel_meter, connect_automatically=True)
     my_sim.add_component(my_heatgen_total_thermal_power)
+    my_sim.add_component(my_heatgen_plant_dhw_thermal_power)
+    my_sim.add_component(my_solar_dhw_thermal_power)
     my_sim.add_component(my_flex_potential)
 

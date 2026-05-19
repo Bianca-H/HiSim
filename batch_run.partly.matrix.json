@@ -1,7 +1,7 @@
 {
   "mode": "matrix",
-  "setup": ["hp02", "hp03", "hp04", "hp05"],
-  "arch": ["01_CH", "02_CH", "03_CH", "04_CH", "05_CH", "06_CH", "07_CH", "08_CH", "09_CH"],
+  "setup": ["bp10"],
+  "arch": ["01_CH","02_CH", "03_CH", "04_CH", "05_CH", "06_CH", "07_CH", "08_CH", "09_CH"],
   "weather": ["ZUESTA", "KLO", "BASSTA", "RUE"],
   "overrides": {
     "HEATGEN_SIZING": "IDEAL_LOOKUP"

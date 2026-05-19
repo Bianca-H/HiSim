@@ -107,6 +107,30 @@ class SimulationParameters(JSONWizard):
             if opt not in self.post_processing_options:
                 self.post_processing_options.append(opt)
 
+    def enable_minimal_variant_artifacts(self) -> None:
+        """Keep disk use small for batch runs.
+
+        Writes only:
+
+        - ``all_results.csv`` (full timestep results, one file),
+        - ``all_kpis.json``,
+        - ``result_data_for_scenario_evaluation/data_for_scenario_evaluation.json``.
+
+        Does **not** enable housing-database CSVs, OPEX/CAPEX reports, resampled scenario-evaluation CSVs, or PDF.
+        ``all_results.csv`` still includes the same derived columns as the standard CSV export (operational emissions,
+        costs, car, heat-supply split) whenever :attr:`EXPORT_TO_CSV` runs.
+
+        Other files may still appear from the core simulator (e.g. ``component_connections.json``, ``finished.flag``)
+        and from the logging configuration (see ``hisim.log`` / default log path).
+        """
+        self.post_processing_options = [
+            PostProcessingOptions.EXPORT_TO_CSV,
+            PostProcessingOptions.EXPORT_RESULTS_IN_ONE_FILE,
+            PostProcessingOptions.COMPUTE_KPIS,
+            PostProcessingOptions.WRITE_KPIS_TO_JSON,
+            PostProcessingOptions.WRITE_SCENARIO_EVALUATION_CONFIG_JSON,
+        ]
+
     @classmethod
     def full_year_all_options(cls, year: int, seconds_per_timestep: int) -> SimulationParameters:
         """Generates a parameter set for a full year with all the post processing, primarily for unit testing."""
@@ -138,6 +162,17 @@ class SimulationParameters(JSONWizard):
             seconds_per_timestep,
         )
         pars.enable_csv_only()
+        return pars
+
+    @classmethod
+    def full_year_with_minimal_variant_artifacts(cls, year: int, seconds_per_timestep: int) -> SimulationParameters:
+        """Full year with :meth:`enable_minimal_variant_artifacts` (small result folder footprint)."""
+        pars = cls(
+            datetime.datetime(year, 1, 1),
+            datetime.datetime(year + 1, 1, 1),
+            seconds_per_timestep,
+        )
+        pars.enable_minimal_variant_artifacts()
         return pars
 
     @classmethod

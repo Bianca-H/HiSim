@@ -24,6 +24,7 @@ from hisim.components import sia2024_occupancy
 from hisim.components import generic_heat_pump
 from hisim.components import strict_comfort_recovery_modifier
 from hisim.components import buffer_remaining_capacity
+from hisim.components import comfort_band_cooling_demand
 from hisim.components import generic_pv_system
 from hisim.components import sumbuilder
 from hisim.components import weather
@@ -46,7 +47,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     seconds_per_timestep = 900.0  # 15 min timesteps (3600s would be 1h, but can cause stability issues with large HP time constants)
 
     if my_simulation_parameters is None:
-        my_simulation_parameters = SimulationParameters.full_year_with_only_csv(
+        my_simulation_parameters = SimulationParameters.full_year_with_minimal_variant_artifacts(
             year=year, seconds_per_timestep=seconds_per_timestep
         )
 
@@ -254,8 +255,19 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             f"ideal {boiler_power_w / 1e3:.2f} kW."
         )
         cli_overrides.set_used_value("BOILER_NOMINAL_POWER_W", str(int(round(boiler_power_w))))
+        chosen_hp_for_ac_sizing = heating_system_selection.pick_heat_pump_closest_to_ideal(
+            ideal_power_in_watt=ideal_heating_power_in_watt
+        )
+        ac_sizing_power_w = float(chosen_hp_for_ac_sizing.nominal_heating_power_in_watt)
+        log.information(
+            f"Split AC sized to discrete heat pump nominal {ac_sizing_power_w / 1e3:.2f} kW "
+            f"({chosen_hp_for_ac_sizing.manufacturer} / {chosen_hp_for_ac_sizing.name}, same rule as HP02)."
+        )
+        cli_overrides.set_used_value("AC_SIZING_POWER_W", str(int(round(ac_sizing_power_w))))
     else:
         boiler_power_w = float(my_building_information.max_thermal_building_demand_in_watt)
+        ac_sizing_power_w = float(my_building_information.max_thermal_building_demand_in_watt)
+        cli_overrides.set_used_value("AC_SIZING_POWER_W", str(int(round(ac_sizing_power_w))))
 
     my_oil_boiler_config = generic_boiler.GenericBoilerConfig.get_scaled_conventional_oil_boiler_config(
         heating_load_of_building_in_watt=boiler_power_w,
@@ -293,9 +305,10 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         config=my_oil_boiler_controller_config,
     )
 
-    # Split AC for cooling (and potentially heating, but we configure it cooling-only here)
+    # Split AC for cooling (and potentially heating, but we configure it cooling-only here).
+    # `heating_load` for catalogue scaling matches HP02: discrete HP nominal under IDEAL_LOOKUP, else Tabula peak.
     my_air_conditioner_config = air_conditioner.AirConditionerConfig.get_scaled_air_conditioner_config(
-        heating_load=float(my_building_information.max_thermal_building_demand_in_watt),
+        heating_load=float(ac_sizing_power_w),
         heating_reference_temperature=float(my_building_information.heating_reference_temperature_in_celsius),
         building_name="BUI1",
     )
@@ -312,18 +325,62 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # Cooling-only: keep heating setpoint far below any realistic indoor temperature.
     my_air_conditioner_controller_config.heating_set_temperature_deg_c = 0.0
     my_air_conditioner_controller_config.cooling_set_temperature_deg_c = 25.0
+    my_air_conditioner_controller_config.minimum_modulation = 0.0
     my_air_conditioner_controller = air_conditioner.AirConditionerController(
         my_simulation_parameters=my_simulation_parameters,
         config=my_air_conditioner_controller_config,
     )
 
-    # Unified "total heat generator thermal power" output for postprocessing across HP/boiler variants.
-    # Column will be: `HeatGeneratorTotalThermalPower - Sum [Any - W]`
-    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForThreeInputs(
+    ac_cooling_cap_w = heating_system_selection.get_cooling_plant_cap_from_hp_nominal(ac_sizing_power_w)
+    log.information(
+        f"Split AC cooling plant cap {ac_cooling_cap_w / 1e3:.2f} kW "
+        f"({heating_system_selection.DEFAULT_COOLING_PLANT_NOMINAL_FRACTION:.0%} of HP nominal "
+        f"{ac_sizing_power_w / 1e3:.2f} kW, aligned with HP cooling KPI scale)."
+    )
+    cli_overrides.set_used_value("COOLING_PLANT_CAP_W", str(int(round(ac_cooling_cap_w))))
+    ac_cooling_p_gain = heating_system_selection.get_cooling_comfort_proportional_gain_w_per_k(
+        ac_cooling_cap_w
+    )
+    my_comfort_cooling_demand = comfort_band_cooling_demand.ComfortBandCoolingDemand(
+        my_simulation_parameters=my_simulation_parameters,
+        config=comfort_band_cooling_demand.ComfortBandCoolingDemandConfig.get_default_config(
+            building_name="BUI1",
+            name="ComfortBandCoolingDemand",
+            max_cooling_power_in_watt=float(ac_cooling_cap_w),
+            proportional_gain_in_watt_per_kelvin=ac_cooling_p_gain,
+            relaxation_factor=heating_system_selection.DEFAULT_COOLING_COMFORT_RELAXATION_FACTOR,
+            theoretical_blend=heating_system_selection.DEFAULT_COOLING_THEORETICAL_BLEND,
+        ),
+    )
+
+    # KPI splits for postprocessing (aligned across HP/BO/BG/BP/GR setups):
+    # - `HeatGeneratorTotalThermalPower`: space heating + split-AC cooling (negative during cooling); no DHW.
+    # - `HeatGeneratorPlantDhwThermalPower`: generator-side DHW (fossil / HP / district).
+    # - `SolarDhwThermalPower`: solar thermal into DHW (0 W here — no solar primary on DHW).
+    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForTwoInputs(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
             building_name="BUI1",
             name="HeatGeneratorTotalThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_heatgen_plant_dhw_thermal_power = sumbuilder.SumBuilderForOneInput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.SumBuilderConfig(
+            building_name="BUI1",
+            name="HeatGeneratorPlantDhwThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_solar_dhw_thermal_power = sumbuilder.ConstantThermalPowerOutput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.ConstantThermalPowerConfig(
+            building_name="BUI1",
+            name="SolarDhwThermalPower",
+            value_watt=0.0,
             loadtype=loadtypes.LoadTypes.ANY,
             unit=loadtypes.Units.WATT,
         ),
@@ -355,7 +412,6 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             temperature_air_heating_in_celsius=20.5,
             temperature_air_cooling_in_celsius=24.0,
             offset=0.5,
-            # Mode 2 supports heating/cooling/off, but strict strategy + thresholds below disables cooling in practice.
             mode=2,
             use_adaptive_comfort_band=True,
             control_strategy="strict_comfort_band_v1",
@@ -482,9 +538,6 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # Oil boiler connects to controller + storages
     my_oil_boiler.connect_only_predefined_connections(my_oil_boiler_controller, my_hot_water_storage, my_dhw_storage)
 
-    # Total thermal power from HVAC generation:
-    # - boiler SH + DHW (positive)
-    # - split AC cooling (negative)
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput1,
         my_oil_boiler.component_name,
@@ -492,13 +545,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput2,
-        my_oil_boiler.component_name,
-        my_oil_boiler.ThermalOutputPowerDhw,
-    )
-    my_heatgen_total_thermal_power.connect_input(
-        my_heatgen_total_thermal_power.SumInput3,
         my_air_conditioner.component_name,
         my_air_conditioner.ThermalPowerDelivered,
+    )
+    my_heatgen_plant_dhw_thermal_power.connect_input(
+        my_heatgen_plant_dhw_thermal_power.SumInput1,
+        my_oil_boiler.component_name,
+        my_oil_boiler.ThermalOutputPowerDhw,
     )
 
     # Split AC controller reads indoor temperature from building
@@ -509,9 +562,40 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_strict_comfort_controller.component_name,
         my_strict_comfort_controller.AppliedControlUpperTemperature,
     )
+    my_air_conditioner_controller.connect_input(
+        my_air_conditioner_controller.CoolingAllowed,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.ControlCoolingAllowed,
+    )
+
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.OperativeTemperature,
+        my_building.component_name,
+        my_building.TemperatureOperative,
+    )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.UpperComfortSetpoint,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.AppliedControlUpperTemperature,
+    )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.CoolingAllowed,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.ControlCoolingAllowed,
+    )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.TheoreticalCoolingDemandFromBuilding,
+        my_building.component_name,
+        my_building.TheoreticalCoolingDemand,
+    )
 
     # Split AC connects to weather + its controller (defaults exist for both)
     my_air_conditioner.connect_only_predefined_connections(my_weather, my_air_conditioner_controller)
+    my_air_conditioner.connect_input(
+        my_air_conditioner.CoolingPowerRequestLimit,
+        my_comfort_cooling_demand.component_name,
+        my_comfort_cooling_demand.CoolingDemand,
+    )
 
     # Sum builder inputs: heat distribution (heating) + split AC (cooling)
     my_thermal_power_sum.connect_input(
@@ -651,9 +735,12 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_heat_distribution_controller)
     my_sim.add_component(my_heat_distribution)
     my_sim.add_component(my_air_conditioner_controller)
+    my_sim.add_component(my_comfort_cooling_demand)
     my_sim.add_component(my_air_conditioner)
     my_sim.add_component(my_thermal_power_sum)
     my_sim.add_component(my_heatgen_total_thermal_power)
+    my_sim.add_component(my_heatgen_plant_dhw_thermal_power)
+    my_sim.add_component(my_solar_dhw_thermal_power)
     my_sim.add_component(my_hot_water_storage)
     my_sim.add_component(my_buffer_remaining)
     my_sim.add_component(my_dhw_storage)

@@ -1120,6 +1120,11 @@ class GenericBoilerControllerConfig(ConfigBase):
     with_domestic_hot_water_preparation: bool
     secondary_mode: Optional[bool]  # If used as secondary heat generator for DHW in hybrid mode
     hysteresis_water_temperature_offset: float
+    # Optional: modulation floor (W) depends on daily mean outdoor temperature (e.g. pellet + solar DHW).
+    seasonal_modulation_minimum_enabled: bool = False
+    winter_modulation_minimum_thermal_power_in_watt: float = 0.0
+    summer_modulation_minimum_thermal_power_in_watt: float = 0.0
+    summer_modulation_daily_avg_outdoor_temperature_threshold_celsius: float = 16.0
 
     @classmethod
     def get_default_modulating_generic_boiler_controller_config(
@@ -1564,6 +1569,7 @@ class GenericBoilerController(Component):
                 control_signal = self.modulate_power(
                     water_temperature_input_in_celsius=water_temperature_input_from_space_heating_water_storage_in_celsius,
                     set_heating_flow_temperature_in_celsius=heating_flow_temperature_from_heat_distribution_system,
+                    daily_average_outside_temperature_in_celsius=daily_avg_outside_temperature_in_celsius,
                 )
             else:
                 control_signal = 1
@@ -1579,6 +1585,7 @@ class GenericBoilerController(Component):
                     water_temperature_input_in_celsius=water_temperature_input_from_dhw_water_storage_in_celsius,
                     set_heating_flow_temperature_in_celsius=self.warm_water_temperature_aim_in_celsius
                     + self.config.hysteresis_water_temperature_offset,
+                    daily_average_outside_temperature_in_celsius=daily_avg_outside_temperature_in_celsius,
                 )
             else:
                 control_signal = 1
@@ -1616,6 +1623,7 @@ class GenericBoilerController(Component):
         self,
         water_temperature_input_in_celsius: float,
         set_heating_flow_temperature_in_celsius: float,
+        daily_average_outside_temperature_in_celsius: float,
     ) -> float:
         """Modulate linearly between minimial_thermal_power and max_thermal_power of Generic Boiler.
 
@@ -1623,9 +1631,22 @@ class GenericBoilerController(Component):
         percentage required to fullfill the minimum thermal power requirement.
         """
 
-        minimal_percentage = float(
-            self.config.minimal_thermal_power_in_watt / self.config.maximal_thermal_power_in_watt
-        )
+        if self.config.seasonal_modulation_minimum_enabled:
+            if (
+                daily_average_outside_temperature_in_celsius
+                >= self.config.summer_modulation_daily_avg_outdoor_temperature_threshold_celsius
+            ):
+                minimal_thermal_power_in_watt = self.config.summer_modulation_minimum_thermal_power_in_watt
+            else:
+                minimal_thermal_power_in_watt = self.config.winter_modulation_minimum_thermal_power_in_watt
+        else:
+            minimal_thermal_power_in_watt = self.config.minimal_thermal_power_in_watt
+
+        max_watt = self.config.maximal_thermal_power_in_watt
+        if max_watt <= 0:
+            return 0.0
+
+        minimal_percentage = float(minimal_thermal_power_in_watt / max_watt)
         if (
             water_temperature_input_in_celsius
             < set_heating_flow_temperature_in_celsius - self.config.set_temperature_difference_for_full_power

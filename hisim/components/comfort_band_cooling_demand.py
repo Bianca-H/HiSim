@@ -8,13 +8,15 @@ district cooling or split AC when you want cooling to be aligned with adaptive c
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from dataclasses_json import dataclass_json
 
 from hisim import component as cp
 from hisim import loadtypes as lt
 from hisim.simulationparameters import SimulationParameters
+
+TheoreticalBlendMode = Literal["floor", "building_only", "comfort_only"]
 
 
 @dataclass_json
@@ -27,6 +29,8 @@ class ComfortBandCoolingDemandConfig(cp.ConfigBase):
     max_cooling_power_in_watt: float
     proportional_gain_in_watt_per_kelvin: float = 10000.0
     relaxation_factor: float = 0.3
+    #: floor | building_only | comfort_only — see class docstring.
+    theoretical_blend: TheoreticalBlendMode = "floor"
 
     @classmethod
     def get_main_classname(cls):
@@ -40,6 +44,7 @@ class ComfortBandCoolingDemandConfig(cp.ConfigBase):
         max_cooling_power_in_watt: float = 20000.0,
         proportional_gain_in_watt_per_kelvin: float = 10000.0,
         relaxation_factor: float = 0.3,
+        theoretical_blend: TheoreticalBlendMode = "floor",
     ) -> Any:
         return ComfortBandCoolingDemandConfig(
             building_name=building_name,
@@ -47,16 +52,27 @@ class ComfortBandCoolingDemandConfig(cp.ConfigBase):
             max_cooling_power_in_watt=max_cooling_power_in_watt,
             proportional_gain_in_watt_per_kelvin=proportional_gain_in_watt_per_kelvin,
             relaxation_factor=relaxation_factor,
+            theoretical_blend=theoretical_blend,
         )
 
 
 class ComfortBandCoolingDemand(cp.Component):
-    """Convert comfort-band temperature exceedance into cooling power demand (W)."""
+    """Convert comfort-band temperature exceedance into cooling power demand (W).
+
+    Optional ``TheoreticalCoolingDemandFromBuilding`` blending (``theoretical_blend``):
+
+    - ``floor``: ``max(P-control, min(need, cap))`` — legacy; can pin at cap and inflate KPI vs HP.
+    - ``building_only``: ``min(need, cap)`` — capped building physics only.
+    - ``comfort_only``: P-control only — ignores theoretical input (BO/GR KPI alignment with HP).
+    """
 
     # Inputs
     OperativeTemperature = "OperativeTemperature"
     UpperComfortSetpoint = "UpperComfortSetpoint"
     CoolingAllowed = "CoolingAllowed"
+    #: Optional: same signal as `Building.TheoreticalCoolingDemand` (negative W when cooling is needed).
+    #: Blending is controlled by `ComfortBandCoolingDemandConfig.theoretical_blend` (see config docstring).
+    TheoreticalCoolingDemandFromBuilding = "TheoreticalCoolingDemandFromBuilding"
 
     # Output
     CoolingDemand = "CoolingDemand"
@@ -101,13 +117,23 @@ class ComfortBandCoolingDemand(cp.Component):
             lt.Units.ANY,
             mandatory=False,
         )
+        self.theoretical_cooling_from_building_in: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.TheoreticalCoolingDemandFromBuilding,
+            lt.LoadTypes.COOLING,
+            lt.Units.WATT,
+            mandatory=False,
+        )
 
         self.cooling_demand_out: cp.ComponentOutput = self.add_output(
             object_name=self.component_name,
             field_name=self.CoolingDemand,
             load_type=lt.LoadTypes.COOLING,
             unit=lt.Units.WATT,
-            output_description="Cooling power request derived from operative temperature above upper comfort setpoint.",
+            output_description=(
+                "Cooling power request (W): comfort-band P-control, optionally blended with building theoretical "
+                "cooling demand per `theoretical_blend` when `TheoreticalCoolingDemandFromBuilding` is connected."
+            ),
         )
 
         # Internal state to break algebraic loops via under-relaxation of the demand signal.
@@ -160,6 +186,22 @@ class ComfortBandCoolingDemand(cp.Component):
         exceed_k = max(0.0, t_op - t_upper)
         raw_w = exceed_k * float(self.config.proportional_gain_in_watt_per_kelvin)
         raw_w = max(0.0, min(raw_w, float(self.config.max_cooling_power_in_watt)))
+
+        max_w = float(self.config.max_cooling_power_in_watt)
+        blend = str(getattr(self.config, "theoretical_blend", "floor") or "floor")
+        if (
+            blend != "comfort_only"
+            and self.theoretical_cooling_from_building_in.source_output is not None
+        ):
+            q_th = float(stsv.get_input_value(self.theoretical_cooling_from_building_in) or 0.0)
+            # Building uses negative watts for cooling need when `TheoreticalThermalBuildingDemand` < 0.
+            need_from_building_w = max(0.0, -q_th)
+            need_capped_w = min(need_from_building_w, max_w)
+            if blend == "building_only":
+                raw_w = need_capped_w
+            else:
+                # "floor": at least the capped building need (legacy anti-overheat behaviour).
+                raw_w = max(raw_w, need_capped_w)
 
         alpha = float(self.config.relaxation_factor)
         alpha = max(0.0, min(alpha, 1.0))

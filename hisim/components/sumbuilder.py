@@ -242,6 +242,165 @@ class SumBuilderForTwoInputs(Component):
         return []
 
 
+class SumBuilderForOneInput(Component):
+    """Single-input passthrough used for CSV-friendly KPI columns (e.g. SH-only totals)."""
+
+    SumInput1 = "Input 1"
+    SumOutput = "Sum"
+
+    def __init__(
+        self,
+        config: SumBuilderConfig,
+        my_simulation_parameters: SimulationParameters,
+        my_display_config: cp.DisplayConfig = cp.DisplayConfig(),
+    ) -> None:
+        """Initializes the class."""
+        self.my_simulation_parameters = my_simulation_parameters
+        self.config = config
+        component_name = self.get_component_name()
+        super().__init__(
+            name=component_name,
+            my_simulation_parameters=my_simulation_parameters,
+            my_config=config,
+            my_display_config=my_display_config,
+        )
+        self.input1: cp.ComponentInput = self.add_input(
+            self.component_name,
+            SumBuilderForOneInput.SumInput1,
+            config.loadtype,
+            config.unit,
+            True,
+        )
+        self.output1: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            SumBuilderForOneInput.SumOutput,
+            config.loadtype,
+            config.unit,
+            output_description="Passthrough of the single input value",
+        )
+
+    def i_save_state(self) -> None:
+        """For saving state."""
+        pass
+
+    def i_doublecheck(self, timestep: int, stsv: cp.SingleTimeStepValues) -> None:
+        """For double checking results."""
+        pass
+
+    def i_restore_state(self) -> None:
+        """Restores state."""
+        pass
+
+    def i_prepare_simulation(self) -> None:
+        """Prepares the simulation."""
+        pass
+
+    def i_simulate(self, timestep: int, stsv: cp.SingleTimeStepValues, force_convergence: bool) -> None:
+        """Copies the input value to the output."""
+        stsv.set_output_value(self.output1, stsv.get_input_value(self.input1))
+
+    def write_to_report(self) -> List[str]:
+        """Writes information to the report."""
+        return [f"Sumbuilder for one input: {self.component_name}"]
+
+    def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
+        """Return zero opex (math helper component)."""
+        return OpexCostDataClass.get_default_opex_cost_data_class()
+
+    @staticmethod
+    def get_cost_capex(config: cp.ConfigBase, simulation_parameters: SimulationParameters) -> CapexCostDataClass:  # noqa: ARG002
+        """Return zero capex (math helper component)."""
+        return CapexCostDataClass.get_default_capex_cost_data_class()
+
+    def get_component_kpi_entries(self, all_outputs: List, postprocessing_results) -> List:  # noqa: ARG002
+        """Return no KPIs (math helper component)."""
+        return []
+
+
+@dataclass_json
+@dataclass
+class ConstantThermalPowerConfig(cp.ConfigBase):
+    """Config for a fixed thermal power output (e.g. zero solar-DHW leg when no solar thermal)."""
+
+    building_name: str
+    name: str
+    value_watt: float = 0.0
+    loadtype: lt.LoadTypes = lt.LoadTypes.ANY
+    unit: lt.Units = lt.Units.WATT
+
+    @classmethod
+    def get_main_classname(cls) -> str:
+        """Returns the full class name of the base class."""
+        return ConstantThermalPowerOutput.get_full_classname()
+
+
+class ConstantThermalPowerOutput(Component):
+    """Emits a constant thermal power each timestep (no inputs)."""
+
+    SumOutput = "Sum"
+
+    def __init__(
+        self,
+        config: ConstantThermalPowerConfig,
+        my_simulation_parameters: SimulationParameters,
+        my_display_config: cp.DisplayConfig = cp.DisplayConfig(),
+    ) -> None:
+        """Initializes the class."""
+        self.my_simulation_parameters = my_simulation_parameters
+        self.config = config
+        component_name = self.get_component_name()
+        super().__init__(
+            name=component_name,
+            my_simulation_parameters=my_simulation_parameters,
+            my_config=config,
+            my_display_config=my_display_config,
+        )
+        self.output1: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            ConstantThermalPowerOutput.SumOutput,
+            config.loadtype,
+            config.unit,
+            output_description="Constant thermal power in watt",
+        )
+
+    def i_save_state(self) -> None:
+        """For saving state."""
+        pass
+
+    def i_doublecheck(self, timestep: int, stsv: cp.SingleTimeStepValues) -> None:
+        """For double checking results."""
+        pass
+
+    def i_restore_state(self) -> None:
+        """Restores state."""
+        pass
+
+    def i_prepare_simulation(self) -> None:
+        """Prepares the simulation."""
+        pass
+
+    def i_simulate(self, timestep: int, stsv: cp.SingleTimeStepValues, force_convergence: bool) -> None:
+        """Writes the configured constant."""
+        stsv.set_output_value(self.output1, self.config.value_watt)
+
+    def write_to_report(self) -> List[str]:
+        """Writes information to the report."""
+        return [f"Constant thermal power output: {self.component_name} = {self.config.value_watt} W"]
+
+    def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
+        """Return zero opex (math helper component)."""
+        return OpexCostDataClass.get_default_opex_cost_data_class()
+
+    @staticmethod
+    def get_cost_capex(config: cp.ConfigBase, simulation_parameters: SimulationParameters) -> CapexCostDataClass:  # noqa: ARG002
+        """Return zero capex (math helper component)."""
+        return CapexCostDataClass.get_default_capex_cost_data_class()
+
+    def get_component_kpi_entries(self, all_outputs: List, postprocessing_results) -> List:  # noqa: ARG002
+        """Return no KPIs (math helper component)."""
+        return []
+
+
 class SumBuilderForThreeInputs(Component):
     """Sum builder for three inputs."""
 
@@ -324,19 +483,6 @@ class SumBuilderForThreeInputs(Component):
     def write_to_report(self) -> List[str]:
         """Writes information to the report."""
         return [f"Sumbuilder for three inputs: {self.component_name}"]
-
-    def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
-        """Return zero opex (math helper component)."""
-        return OpexCostDataClass.get_default_opex_cost_data_class()
-
-    @staticmethod
-    def get_cost_capex(config: cp.ConfigBase, simulation_parameters: SimulationParameters) -> CapexCostDataClass:  # noqa: ARG002
-        """Return zero capex (math helper component)."""
-        return CapexCostDataClass.get_default_capex_cost_data_class()
-
-    def get_component_kpi_entries(self, all_outputs: List, postprocessing_results) -> List:  # noqa: ARG002
-        """Return no KPIs (math helper component)."""
-        return []
 
     def get_cost_opex(self, all_outputs: List, postprocessing_results) -> OpexCostDataClass:  # noqa: ARG002
         """Return zero opex (math helper component)."""

@@ -48,7 +48,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     seconds_per_timestep = 900.0  # 15 min timesteps
 
     if my_simulation_parameters is None:
-        my_simulation_parameters = SimulationParameters.full_year_with_only_csv(
+        my_simulation_parameters = SimulationParameters.full_year_with_minimal_variant_artifacts(
             year=year, seconds_per_timestep=seconds_per_timestep
         )
 
@@ -414,26 +414,34 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         config=electricity_meter.ElectricityMeterConfig.get_electricity_meter_default_config(),
     )
 
-    # Unified "total heat generator thermal power" output for postprocessing across HP/boiler variants.
-    # Column will be: `HeatGeneratorTotalThermalPower - Sum [Any - W]`
-    #
-    # HP05 is a hybrid (HP + peak oil boiler), so we sum:
-    # - heat pump total (SH + DHW + cooling; cooling is negative)
-    # - oil boiler SH
-    my_hp_total_thermal_power = sumbuilder.SumBuilderForThreeInputs(
-        my_simulation_parameters=my_simulation_parameters,
-        config=sumbuilder.SumBuilderConfig(
-            building_name="BUI1",
-            name="HeatPumpTotalThermalPowerInternal",
-            loadtype=loadtypes.LoadTypes.ANY,
-            unit=loadtypes.Units.WATT,
-        ),
-    )
+    # KPI splits for postprocessing (aligned across HP/BO/BG/BP/GR setups):
+    # - `HeatGeneratorTotalThermalPower`: HP `ThermalOutputPowerSH` (includes cooling as negative) + peak oil SH; no DHW.
+    # - `HeatGeneratorPlantDhwThermalPower`: generator-side DHW (HP only here; peak boiler has no DHW path).
+    # - `SolarDhwThermalPower`: solar thermal into DHW (0 W here).
     my_heatgen_total_thermal_power = sumbuilder.SumBuilderForTwoInputs(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
             building_name="BUI1",
             name="HeatGeneratorTotalThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_heatgen_plant_dhw_thermal_power = sumbuilder.SumBuilderForOneInput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.SumBuilderConfig(
+            building_name="BUI1",
+            name="HeatGeneratorPlantDhwThermalPower",
+            loadtype=loadtypes.LoadTypes.ANY,
+            unit=loadtypes.Units.WATT,
+        ),
+    )
+    my_solar_dhw_thermal_power = sumbuilder.ConstantThermalPowerOutput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.ConstantThermalPowerConfig(
+            building_name="BUI1",
+            name="SolarDhwThermalPower",
+            value_watt=0.0,
             loadtype=loadtypes.LoadTypes.ANY,
             unit=loadtypes.Units.WATT,
         ),
@@ -670,26 +678,6 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_dhw_storage,
     )
 
-    # Total thermal power from heat pump:
-    # - SH + DHW (positive)
-    # - cooling output (negative, per `GenericHeatPump.Cooling`)
-    my_hp_total_thermal_power.connect_input(
-        my_hp_total_thermal_power.SumInput1,
-        my_heatpump.component_name,
-        my_heatpump.ThermalOutputPowerSH,
-    )
-    my_hp_total_thermal_power.connect_input(
-        my_hp_total_thermal_power.SumInput2,
-        my_heatpump.component_name,
-        my_heatpump.ThermalOutputPowerDHW,
-    )
-    # In HPLib HP, SH thermal output becomes negative during cooling mode (OnOffSwitchSH = -1).
-    my_hp_total_thermal_power.connect_input(
-        my_hp_total_thermal_power.SumInput3,
-        my_heatpump.component_name,
-        my_heatpump.ThermalOutputPowerSH,
-    )
-
     if float(my_heatpump.parameters["Group"].iloc[0]) in (1.0, 4.0):
         my_heatpump.connect_input(
             my_heatpump.TemperatureInputPrimary,
@@ -711,16 +699,20 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     # Oil boiler: controller + buffer (DHW path unused here)
     my_oil_boiler.connect_only_predefined_connections(my_oil_boiler_controller, my_hot_water_storage)
 
-    # Total thermal power (HP total + peak boiler SH)
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput1,
-        my_hp_total_thermal_power.component_name,
-        my_hp_total_thermal_power.SumOutput,
+        my_heatpump.component_name,
+        my_heatpump.ThermalOutputPowerSH,
     )
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput2,
         my_oil_boiler.component_name,
         my_oil_boiler.ThermalPowerGenerationSh,
+    )
+    my_heatgen_plant_dhw_thermal_power.connect_input(
+        my_heatgen_plant_dhw_thermal_power.SumInput1,
+        my_heatpump.component_name,
+        my_heatpump.ThermalOutputPowerDHW,
     )
 
     my_hot_water_storage.connect_input(
@@ -1000,11 +992,12 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_heatpump_controller_space_heating)
     my_sim.add_component(my_heatpump_controller_dhw)
     my_sim.add_component(my_heatpump)
-    my_sim.add_component(my_hp_total_thermal_power)
     my_sim.add_component(my_oil_boiler_controller)
     my_sim.add_component(my_oil_boiler)
     my_sim.add_component(my_fuel_meter, connect_automatically=True)
     my_sim.add_component(my_heatgen_total_thermal_power)
+    my_sim.add_component(my_heatgen_plant_dhw_thermal_power)
+    my_sim.add_component(my_solar_dhw_thermal_power)
     my_sim.add_component(my_hydraulic_mixer)
     my_sim.add_component(my_flex_potential)
     my_sim.add_component(my_battery_energy_wh)

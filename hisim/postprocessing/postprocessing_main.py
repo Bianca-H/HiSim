@@ -84,6 +84,7 @@ class PostProcessor:
                 PostProcessingOptions.WRITE_COMPONENT_CONFIGS_TO_JSON,
                 PostProcessingOptions.WRITE_KPIS_TO_JSON,
                 PostProcessingOptions.WRITE_KPIS_TO_JSON_FOR_BUILDING_SIZER,
+                PostProcessingOptions.WRITE_SCENARIO_EVALUATION_CONFIG_JSON,
             }
             # Of all specified options, select those that are allowed
             valid_options = list(set(ppdt.post_processing_options) & allowed_options_for_docker)
@@ -328,6 +329,17 @@ class PostProcessor:
         if PostProcessingOptions.WRITE_KPIS_TO_JSON in ppdt.post_processing_options:
             log.information("Write all KPIs to json file.")
             self.write_kpis_to_json_file(ppdt)
+
+        if (
+            PostProcessingOptions.WRITE_SCENARIO_EVALUATION_CONFIG_JSON in ppdt.post_processing_options
+            and PostProcessingOptions.PREPARE_OUTPUTS_FOR_SCENARIO_EVALUATION not in ppdt.post_processing_options
+        ):
+            log.information("Writing scenario evaluation config JSON (minimal path, no PREPARE_OUTPUTS).")
+            start = timer()
+            self.write_config_data_for_scenario_evaluation(ppdt)
+            end = timer()
+            duration = end - start
+            log.information("Writing scenario evaluation config JSON took " + f"{duration:1.2f}s.")
 
         log.information("Finished main post processing function.")
 
@@ -1190,6 +1202,14 @@ class PostProcessor:
         else:
             log.information("This result data path exists already: " + self.result_data_folder_for_scenario_evaluation)
 
+        if PostProcessingOptions.WRITE_SCENARIO_EVALUATION_CONFIG_JSON in ppdt.post_processing_options:
+            log.information(
+                "Scenario evaluation: writing data_for_scenario_evaluation.json only "
+                "(skipping hourly/daily/monthly/yearly CSV exports under result_data_for_scenario_evaluation)."
+            )
+            self.write_config_data_for_scenario_evaluation(ppdt)
+            return
+
         # --------------------------------------------------------------------------------------------------------------------------------------------------------------
         # make dictionaries with pyam data structure yearly data
 
@@ -1274,7 +1294,10 @@ class PostProcessor:
     def write_config_data_for_scenario_evaluation(self, ppdt: PostProcessingDataTransfer) -> None:
         """Prepare the results for the scenario evaluation."""
         # create dictionary with all import data information
-        if PostProcessingOptions.PREPARE_OUTPUTS_FOR_SCENARIO_EVALUATION in ppdt.post_processing_options:
+        if (
+            PostProcessingOptions.PREPARE_OUTPUTS_FOR_SCENARIO_EVALUATION in ppdt.post_processing_options
+            or PostProcessingOptions.WRITE_SCENARIO_EVALUATION_CONFIG_JSON in ppdt.post_processing_options
+        ):
             result_data_folder_for_scenario_evaluation = os.path.join(
                 ppdt.simulation_parameters.result_directory, "result_data_for_scenario_evaluation"
             )
