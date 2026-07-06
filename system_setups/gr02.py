@@ -19,6 +19,7 @@ from hisim.components import loadprofilegenerator_utsp_connector
 from hisim.components import generic_district_heating
 from hisim.components import generic_district_cooling
 from hisim.components import comfort_band_cooling_demand
+from hisim.components import comfort_band_heating_demand
 from hisim.components import fuel_meter
 from hisim.components import simple_water_storage
 from hisim.components import sia2024_occupancy
@@ -42,7 +43,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
 
     # =============================================================================================================================
     # Set simulation parameters
-    year = 2021
+    year = cli_overrides.get_economic_year()
     seconds_per_timestep = 900.0  # 15 min timesteps (3600s would be 1h, but can cause stability issues with large HP time constants)
 
     if my_simulation_parameters is None:
@@ -75,30 +76,31 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     cli_overrides.set_used_value("ARCH", arch_used)
     cli_overrides.set_used_value("WEATHER", weather_used)
 
+    time_horizon_used = cli_overrides.get_time_horizon()
+    cli_overrides.set_used_value("TIME_HORIZON", time_horizon_used)
+
+    active_scenarios = cli_overrides.get_active_scenarios()
+    cli_overrides.set_used_value(
+        "SCENARIO",
+        ",".join(sorted(active_scenarios)) if active_scenarios else "none",
+    )
+    if cli_overrides.has_scenario(cli_overrides.SCENARIO_FOSSIL_CRISIS):
+        log.information(
+            "Applied scenario SCENARIO=fossil_Crisis: elevated gas/oil prices and lowered adaptive comfort lower bound."
+        )
+    if cli_overrides.has_scenario(cli_overrides.SCENARIO_HEATWAVE):
+        log.information(
+            f"Applied scenario SCENARIO=heatwave with TIME_HORIZON={time_horizon_used}: using heatwave future weather file."
+        )
+
     # =============================================================================================================================
     # Build Weather
-    my_weather_config = weather.WeatherConfig.get_default(
-        location_entry=getattr(weather.LocationEnum, default_weather)
+    my_weather_config = cli_overrides.apply_weather_location_override(
+        weather_module=weather,
+        weather_value=weather_used,
+        name="Weather",
+        building_name="BUI1",
     )
-    if weather_override is not None:
-        try:
-            my_weather_config = cli_overrides.apply_weather_location_override(
-                weather_module=weather,
-                weather_value=weather_override,
-                name="Weather",
-                building_name="BUI1",
-            )
-            log.information(f"Applied CLI override WEATHER={weather_override} to weather configuration.")
-        except Exception:
-            log.warning(
-                f"CLI override WEATHER={weather_override} was provided, but no matching "
-                f"`LocationEnum.{weather_override}` exists in `hisim.components.weather`. Using default weather config."
-            )
-            my_weather_config = weather.WeatherConfig.get_default(
-                location_entry=getattr(weather.LocationEnum, default_weather)
-            )
-            weather_used = default_weather
-            cli_overrides.set_used_value("WEATHER", weather_used)
     my_weather = weather.Weather(config=my_weather_config, my_simulation_parameters=my_simulation_parameters)
 
     # =============================================================================================================================
@@ -137,10 +139,12 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
 
     # Ensure building demand is based on (at least) the comfort-lower level used in basic_household.
     # The adaptive comfort bounds are exposed as outputs, but the building demand setpoint is driven by these config values.
-    my_building_config.set_heating_temperature_in_celsius = 20.5
+    my_building_config.set_heating_temperature_in_celsius = cli_overrides.DEFAULT_HEATING_SETPOINT_IN_CELSIUS
+    cli_overrides.apply_scenario_building_settings(my_building_config)
     # Enable cooling demand in GR02 (district cooling provides it).
     # Use a setpoint aligned with the strict comfort cooling baseline so the building actually requests cooling.
     my_building_config.set_cooling_temperature_in_celsius = 24.0
+    cli_overrides.apply_swiss_sia_natural_ventilation_settings(my_building_config)
 
     my_building_information = building.BuildingInformation(config=my_building_config)
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
@@ -283,14 +287,27 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         config=my_district_heating_config,
     )
 
-    # Fuel meter (district heating) for operational cost/emission postprocessing aggregation
-    my_fuel_meter_config = fuel_meter.FuelMeterConfig.get_fuel_meter_default_config(
+    # Fuel meters for operational cost/emission postprocessing aggregation
+    # - district heating (thermal energy for SH + DHW)
+    # - district cooling (cooling energy, metered separately to apply cooling tariffs incl. capacity costs)
+    my_fuel_meter_dh_config = fuel_meter.FuelMeterConfig.get_fuel_meter_default_config(
         building_name="BUI1",
         fuel_loadtype=loadtypes.LoadTypes.DISTRICTHEATING,
     )
-    my_fuel_meter = fuel_meter.FuelMeter(
+    my_fuel_meter_dh_config.name = "FuelMeterDistrictHeating"
+    my_fuel_meter_dh = fuel_meter.FuelMeter(
         my_simulation_parameters=my_simulation_parameters,
-        config=my_fuel_meter_config,
+        config=my_fuel_meter_dh_config,
+    )
+
+    my_fuel_meter_dc_config = fuel_meter.FuelMeterConfig.get_fuel_meter_default_config(
+        building_name="BUI1",
+        fuel_loadtype=loadtypes.LoadTypes.DISTRICTCOOLING,
+    )
+    my_fuel_meter_dc_config.name = "FuelMeterDistrictCooling"
+    my_fuel_meter_dc = fuel_meter.FuelMeter(
+        my_simulation_parameters=my_simulation_parameters,
+        config=my_fuel_meter_dc_config,
     )
 
     # KPI splits for postprocessing (aligned across HP/BO/BG/BP/GR setups):
@@ -429,6 +446,34 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_building.TemperatureComfortLowerBound,
     )
 
+    # Proportional comfort-band heating demand (TOP undershoot vs adaptive comfort lower bound).
+    max_sh_power_w = float(my_building_information.max_thermal_building_demand_in_watt or 0.0)
+    proportional_band_k = 0.5  # full request at 0.5 K below lower comfort bound
+    my_comfort_heating_demand = comfort_band_heating_demand.ComfortBandHeatingDemand(
+        my_simulation_parameters=my_simulation_parameters,
+        config=comfort_band_heating_demand.ComfortBandHeatingDemandConfig.get_default_config(
+            building_name="BUI1",
+            name="ComfortBandHeatingDemand",
+            max_heating_power_in_watt=max_sh_power_w,
+            proportional_gain_in_watt_per_kelvin=(max_sh_power_w / max(proportional_band_k, 1e-6)),
+        ),
+    )
+    my_comfort_heating_demand.connect_input(
+        my_comfort_heating_demand.OperativeTemperature,
+        my_building.component_name,
+        my_building.TemperatureOperative,
+    )
+    my_comfort_heating_demand.connect_input(
+        my_comfort_heating_demand.LowerComfortSetpoint,
+        my_building.component_name,
+        my_building.TemperatureComfortLowerBound,
+    )
+    my_comfort_heating_demand.connect_input(
+        my_comfort_heating_demand.HeatingAllowed,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.ControlHeatingAllowed,
+    )
+
     # Apply the same modifier to the heat distribution controller so that
     # required flow temperatures increase when strict comfort requires higher indoor temperatures.
     # Otherwise, the system may keep the buffer tank only barely warm (low flow temp),
@@ -530,8 +575,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_heat_distribution_controller.connect_only_predefined_connections(my_weather)
     my_heat_distribution_controller.connect_input(
         my_heat_distribution_controller.TheoreticalThermalBuildingDemand,
-        my_building.component_name,
-        my_building.TheoreticalHeatingDemand,
+        my_comfort_heating_demand.component_name,
+        my_comfort_heating_demand.HeatingDemand,
     )
     my_heat_distribution.connect_only_predefined_connections(
         my_building, my_heat_distribution_controller, my_hot_water_storage
@@ -676,6 +721,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_electricity_meter)
     my_sim.add_component(my_building)
     my_sim.add_component(my_strict_comfort_controller)
+    my_sim.add_component(my_comfort_heating_demand)
     my_sim.add_component(my_setpoint_modifier)
     my_sim.add_component(my_heat_distribution_controller)
     my_sim.add_component(my_heat_distribution)
@@ -687,7 +733,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_district_cooling)
     my_sim.add_component(my_comfort_cooling_demand)
     my_sim.add_component(my_thermal_power_sum)
-    my_sim.add_component(my_fuel_meter, connect_automatically=True)
+    my_sim.add_component(my_fuel_meter_dh, connect_automatically=True)
+    my_sim.add_component(my_fuel_meter_dc, connect_automatically=True)
     my_sim.add_component(my_heatgen_total_thermal_power)
     my_sim.add_component(my_heatgen_plant_dhw_thermal_power)
     my_sim.add_component(my_solar_dhw_thermal_power)

@@ -1126,7 +1126,9 @@ class UtspLpgConnector(cp.Component):
 
                 lpe: lpg_execution.LPGExecutor = lpg_execution.LPGExecutor(calculation_index, True)
 
-                request = lpe.make_default_lpg_settings(self.my_simulation_parameters.year)
+                request = lpe.make_default_lpg_settings(
+                    utils.get_lpg_schedule_year(self.my_simulation_parameters.year)
+                )
                 if random_seed is not None and request.CalcSpec is not None:
                     request.CalcSpec.RandomSeed = random_seed
                 assert request.House is not None, "HouseData was None"
@@ -1699,11 +1701,12 @@ class UtspLpgConnector(cp.Component):
             ).tolist()  # 1 kWh/min == 60W / min
 
         # put everything in a data frame and convert to utc
+        lpg_schedule_year = utils.get_lpg_schedule_year(self.my_simulation_parameters.year)
         initial_data = pd.DataFrame(
             {
                 "Time": pd.date_range(
-                    start=datetime.datetime(year=self.my_simulation_parameters.year, month=1, day=1),
-                    end=datetime.datetime(year=self.my_simulation_parameters.year, month=1, day=1)
+                    start=datetime.datetime(year=lpg_schedule_year, month=1, day=1),
+                    end=datetime.datetime(year=lpg_schedule_year, month=1, day=1)
                     + datetime.timedelta(days=simulation_time_span.days)
                     - datetime.timedelta(seconds=60),
                     freq="min",
@@ -1717,7 +1720,7 @@ class UtspLpgConnector(cp.Component):
         initial_data["water_consumption"] = water_consumption_list
         initial_data["inner_device_heat_gains"] = inner_device_heat_gains_list
 
-        initial_data = utils.convert_lpg_data_to_utc(data=initial_data, year=self.my_simulation_parameters.year)
+        initial_data = utils.convert_lpg_data_to_utc(data=initial_data, year=lpg_schedule_year)
 
         # extract everything from data frame
         electricity_consumption = initial_data["electricity_consumption"].tolist()

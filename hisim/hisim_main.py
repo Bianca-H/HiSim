@@ -106,7 +106,7 @@ if __name__ == "__main__":
     FUNCTION_NAME = "setup_function"
     # Optional arguments:
     # - a module config path (legacy positional)
-    # - key/value overrides like ARCH=01_CH WEATHER=BASSTA
+    # - key/value overrides like ARCH=01_CH WEATHER=BASSTA TIME_HORIZON=future SCENARIO=fossil_Crisis,heatwave
     module_config: Optional[str] = None
     overrides: dict[str, str] = {}
     for arg in sys.argv[2:]:

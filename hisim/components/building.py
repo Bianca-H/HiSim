@@ -118,9 +118,13 @@ class BuildingConfig(cp.ConfigBase):
     # subsidies as percentage of investment costs
     subsidy_as_percentage_of_investment_costs: Optional[float]
     #: Natural ventilation rate per person in m3/h/person (applied when people are present, if enabled).
-    natural_ventilation_m3_per_h_per_person: float = 0.0
+    natural_ventilation_m3_per_h_per_person: float = 29.0
     #: If true, add occupancy-driven natural ventilation heat transfer.
     enable_occupancy_driven_natural_ventilation: bool = True
+    #: SIA hygienic minimum air flow per conditioned floor area (m3/h/m2), always applied when enabled.
+    sia_natural_ventilation_m3_per_h_per_m2: float = 0.6
+    #: If true, add floor-area-based SIA ventilation to the additional H_ve term.
+    enable_sia_floor_area_natural_ventilation: bool = True
     #: If true, add extra summer window ventilation to reach a target ACH when occupants are present
     #: and comfort is exceeded (implemented as additional indoor-air mixing).
     enable_summer_window_ventilation_ach: bool = True
@@ -131,6 +135,39 @@ class BuildingConfig(cp.ConfigBase):
     summer_window_ventilation_open_when_outdoor_cooler_than_operative: bool = True
     #: Only apply summer window ventilation when the running mean outdoor temperature is above this threshold.
     summer_window_ventilation_enable_running_mean_outdoor_temperature_threshold_in_celsius: float = -10.0
+    #: When set, replaces TABULA ``n_air_infiltration`` in base ventilation conductance (1/h).
+    swiss_infiltration_rate_per_h: Optional[float] = None
+    #: Heating demand model: ``iso13790`` (ISO C.4 deadband) or ``operative_comfort_proportional``.
+    heating_demand_mode: str = "iso13790"
+    #: Comfort-deficit band width (K) for proportional operative heating demand (full load at this deficit).
+    operative_heating_proportional_band_in_celsius: float = 1.0
+    #: Multiplier on conductance-based heating demand (CH setups use a higher value).
+    operative_heating_proportional_gain: float = 1.0
+    #: When operative is below comfort_lower, demand is at least this fraction of design peak (0–1).
+    operative_heating_minimum_fraction_below_comfort_lower: float = 0.0
+    #: Match ``strict_comfort_band_v1``: heat when operative drops below comfort_lower + this offset (K).
+    use_strict_comfort_band_for_operative_heating: bool = False
+    operative_comfort_inner_offset_lower_in_celsius: float = 1.0
+    operative_comfort_inner_offset_upper_in_celsius: float = 0.5
+    #: Seasonal heating cutoff (48 h outdoor mean); ``None`` disables gating on the building demand.
+    heating_disabled_above_running_mean_outdoor_temperature_in_celsius: Optional[float] = None
+    #: If true, seasonal cutoff only blocks demand when operative is already at/above comfort_lower.
+    comfort_aware_seasonal_heating_gate: bool = True
+    #: Shift applied to adaptive comfort lower bound for heating/control only (K); upper bound and KPI degree-hours stay unshifted.
+    control_comfort_lower_bound_shift_in_celsius: float = 0.0
+
+    def swiss_natural_ventilation_enabled(self) -> bool:
+        """True when Swiss SIA / occupancy natural ventilation add-ons replace TABULA n_air_use."""
+        sia_on = self.enable_sia_floor_area_natural_ventilation and self.sia_natural_ventilation_m3_per_h_per_m2 > 0.0
+        occ_on = (
+            self.enable_occupancy_driven_natural_ventilation
+            and self.natural_ventilation_m3_per_h_per_person > 0.0
+        )
+        return sia_on or occ_on
+
+    def uses_operative_comfort_proportional_heating_demand(self) -> bool:
+        """True when space-heating demand follows operative temperature vs comfort lower bound."""
+        return self.heating_demand_mode == "operative_comfort_proportional"
 
     @classmethod
     def get_default_german_single_family_home(
@@ -808,6 +845,7 @@ class Building(cp.Component):
     TemperatureComfortUpperBound = "TemperatureComfortUpperBound"
     TemperatureOverTemperatureDegreeHours = "TemperatureOverTemperatureDegreeHours"
     TemperatureUnderTemperatureDegreeHours = "TemperatureUnderTemperatureDegreeHours"
+    TemperatureRelaxedUnderTemperatureDegreeHours = "TemperatureRelaxedUnderTemperatureDegreeHours"
     TotalThermalPowerToResidence = "TotalThermalPowerToResidence"
     SolarGainThroughWindows = "SolarGainThroughWindows"
     AppliedSolarShadingFactor = "AppliedSolarShadingFactor"
@@ -1067,7 +1105,19 @@ class Building(cp.Component):
             self.TemperatureUnderTemperatureDegreeHours,
             lt.LoadTypes.ANY,
             lt.Units.HOURS,
-            output_description=f"Undertemperature degree-hours below comfort lower bound (per timestep).",
+            output_description=(
+                "Undertemperature degree-hours below the standard (unshifted) adaptive comfort lower bound (per timestep)."
+            ),
+        )
+        self.temperature_relaxed_under_temperature_degree_hours_channel: cp.ComponentOutput = self.add_output(
+            self.component_name,
+            self.TemperatureRelaxedUnderTemperatureDegreeHours,
+            lt.LoadTypes.ANY,
+            lt.Units.HOURS,
+            output_description=(
+                "Relaxed undertemperature degree-hours below the control (possibly shifted) comfort lower bound "
+                "(per timestep)."
+            ),
         )
         self.total_thermal_power_to_residence_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
@@ -1089,7 +1139,10 @@ class Building(cp.Component):
             self.AppliedNaturalVentilationAirFlow,
             lt.LoadTypes.ANY,
             lt.Units.ANY,
-            output_description="Applied occupancy-driven natural ventilation outdoor air flow in m3/h.",
+            output_description=(
+                "Applied natural ventilation outdoor air flow in m3/h "
+                "(SIA floor-area + occupancy-driven when enabled)."
+            ),
         )
         self.applied_natural_ventilation_h_ve_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
@@ -1562,18 +1615,24 @@ class Building(cp.Component):
 
         building_temperature_modifier = stsv.get_input_value(self.building_temperature_modifier_channel)
 
-        # Occupancy-driven natural ventilation (Swiss SFH archetypes): 29 m3/h/person when people are present.
-        # Implemented as additional ventilation heat transfer coefficient H_ve_add (W/K).
-        # 0.34 Wh/(m3*K) * m3/h == W/K
+        # Swiss SFH natural ventilation add-on: SIA floor-area flow + occupancy flow (W/K via 0.34 * m3/h).
         h_ve_add_in_watt_per_kelvin = 0.0
         vdot_m3_per_h = 0.0
+        if self.buildingconfig.enable_sia_floor_area_natural_ventilation:
+            rate_m3_per_h_per_m2 = float(self.buildingconfig.sia_natural_ventilation_m3_per_h_per_m2)
+            if rate_m3_per_h_per_m2 > 0.0:
+                floor_area_m2 = float(self.my_building_information.scaled_conditioned_floor_area_in_m2)
+                vdot_m3_per_h += rate_m3_per_h_per_m2 * floor_area_m2
         if self.buildingconfig.enable_occupancy_driven_natural_ventilation:
             people_present = 0.0
             if self.number_of_residents_channel.source_output is not None:
                 people_present = float(stsv.get_input_value(self.number_of_residents_channel))
             if people_present > 0.0:
-                vdot_m3_per_h = float(self.buildingconfig.natural_ventilation_m3_per_h_per_person) * people_present
-                h_ve_add_in_watt_per_kelvin = 0.34 * vdot_m3_per_h
+                vdot_m3_per_h += (
+                    float(self.buildingconfig.natural_ventilation_m3_per_h_per_person) * people_present
+                )
+        if vdot_m3_per_h > 0.0:
+            h_ve_add_in_watt_per_kelvin = 0.34 * vdot_m3_per_h
 
         # Apply dynamic ventilation coefficient for this timestep.
         base_h_ve = float(
@@ -1656,12 +1715,22 @@ class Building(cp.Component):
         else:
             self.window_open = 0
 
+        operative_temperature_in_celsius = (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2
+        comfort_lower_bound, comfort_upper_bound = self.compute_adaptive_comfort_bounds(
+            running_average_outside_temperature_in_celsius
+        )
+        comfort_lower_bound_shift_in_celsius = float(
+            self.buildingconfig.control_comfort_lower_bound_shift_in_celsius or 0.0
+        )
+        control_lower_bound = comfort_lower_bound + comfort_lower_bound_shift_in_celsius
+        control_upper_bound = comfort_upper_bound
+
         # increase set_heating_temperature when connected to EnergyManagementSystem and surplus electricity available
         set_heating_temperature_modified_in_celsius = (
             self.set_heating_temperature_in_celsius + building_temperature_modifier
         )
 
-        theoretical_thermal_building_demand_in_watt = self.calc_theoretical_thermal_building_demand_for_building(
+        iso_theoretical_thermal_building_demand_in_watt = self.calc_theoretical_thermal_building_demand_for_building(
             set_heating_temperature_in_celsius=set_heating_temperature_modified_in_celsius,
             set_cooling_temperature_in_celsius=self.set_cooling_temperature_in_celsius,
             previous_thermal_mass_temperature_in_celsius=previous_thermal_mass_temperature_in_celsius,
@@ -1670,19 +1739,53 @@ class Building(cp.Component):
             heat_flux_indoor_air_in_watt=internal_heat_flux_to_indoor_air_in_watt,
             heat_flux_internal_room_surface_in_watt=internal_heat_flux_to_internal_room_surface_in_watt,
         )
+
+        if self.buildingconfig.uses_operative_comfort_proportional_heating_demand():
+            heating_target_in_celsius = self.get_operative_heating_target_in_celsius(
+                comfort_lower_bound_in_celsius=control_lower_bound,
+                comfort_upper_bound_in_celsius=control_upper_bound,
+            )
+            seasonal_cutoff_in_celsius = (
+                self.buildingconfig.heating_disabled_above_running_mean_outdoor_temperature_in_celsius
+            )
+            apply_seasonal_gate = (
+                seasonal_cutoff_in_celsius is not None
+                and running_average_outside_temperature_in_celsius > float(seasonal_cutoff_in_celsius)
+            )
+            if apply_seasonal_gate and self.buildingconfig.comfort_aware_seasonal_heating_gate:
+                # Only skip shoulder-season lock-out while still below the strict heating target.
+                apply_seasonal_gate = operative_temperature_in_celsius >= heating_target_in_celsius
+            if apply_seasonal_gate:
+                theoretical_heating_demand_in_watt = 0.0
+            else:
+                theoretical_heating_demand_in_watt = self.calc_operative_comfort_proportional_heating_demand(
+                    operative_temperature_in_celsius=operative_temperature_in_celsius,
+                    heating_target_in_celsius=heating_target_in_celsius,
+                    comfort_lower_bound_in_celsius=control_lower_bound,
+                    outside_temperature_in_celsius=temperature_outside_in_celsius,
+                )
+            theoretical_cooling_demand_in_watt = (
+                iso_theoretical_thermal_building_demand_in_watt
+                if iso_theoretical_thermal_building_demand_in_watt < 0
+                else 0.0
+            )
+            theoretical_thermal_building_demand_in_watt = (
+                theoretical_heating_demand_in_watt + theoretical_cooling_demand_in_watt
+            )
+        else:
+            theoretical_thermal_building_demand_in_watt = iso_theoretical_thermal_building_demand_in_watt
+            theoretical_heating_demand_in_watt = (
+                theoretical_thermal_building_demand_in_watt if theoretical_thermal_building_demand_in_watt > 0 else 0
+            )
+            theoretical_cooling_demand_in_watt = (
+                theoretical_thermal_building_demand_in_watt if theoretical_thermal_building_demand_in_watt < 0 else 0
+            )
+
         theoretical_thermal_energy_building_demand_in_watt_hour = (
             theoretical_thermal_building_demand_in_watt * self.my_simulation_parameters.seconds_per_timestep / 3.6e3
         )
-
-        # Split into heating and cooling demand to avoid averaging out values when aggregating
-        theoretical_heating_demand_in_watt = (
-            theoretical_thermal_building_demand_in_watt if theoretical_thermal_building_demand_in_watt > 0 else 0
-        )
         theoretical_heating_energy_demand_in_watt_hour = (
             theoretical_heating_demand_in_watt * self.my_simulation_parameters.seconds_per_timestep / 3.6e3
-        )
-        theoretical_cooling_demand_in_watt = (
-            theoretical_thermal_building_demand_in_watt if theoretical_thermal_building_demand_in_watt < 0 else 0
         )
         theoretical_cooling_energy_demand_in_watt_hour = (
             theoretical_cooling_demand_in_watt * self.my_simulation_parameters.seconds_per_timestep / 3.6e3
@@ -1715,35 +1818,10 @@ class Building(cp.Component):
         )
         stsv.set_output_value(
             self.operative_temperature_channel,
-            (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2,
+            operative_temperature_in_celsius,
         )
-        operative_temperature_in_celsius = (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2
-        # Comfort temperature band dependent on 48h running average outdoor air temperature.
-        # Lower bound:
-        #   x <= 19°C  -> 20.5°C
-        #   19..23°C   -> linearly to 22.0°C
-        #   x >= 23°C  -> 22.0°C
-        x = running_average_outside_temperature_in_celsius
-        if x <= 19.0:
-            comfort_lower_bound = 20.5
-        elif x >= 23.0:
-            comfort_lower_bound = 22.0
-        else:
-            comfort_lower_bound = 20.5 + (x - 19.0) * (22.0 - 20.5) / (23.0 - 19.0)
-
-        # Upper bound:
-        #   x <= 12°C  -> 24.5°C
-        #   12..17°C   -> linearly to 26.5°C
-        #   x >= 17°C  -> 26.5°C
-        if x <= 12.0:
-            comfort_upper_bound = 24.5
-        elif x >= 17.0:
-            comfort_upper_bound = 26.5
-        else:
-            comfort_upper_bound = 24.5 + (x - 12.0) * (26.5 - 24.5) / (17.0 - 12.0)
-
-        stsv.set_output_value(self.temperature_comfort_lower_bound_channel, comfort_lower_bound)
-        stsv.set_output_value(self.temperature_comfort_upper_bound_channel, comfort_upper_bound)
+        stsv.set_output_value(self.temperature_comfort_lower_bound_channel, control_lower_bound)
+        stsv.set_output_value(self.temperature_comfort_upper_bound_channel, control_upper_bound)
 
         # Comfort-band thermal flexibility (ISO 13790 C.4 two-point linearization).
         # We compute the required thermal power to hit a *target operative* temperature at end of timestep,
@@ -1768,18 +1846,18 @@ class Building(cp.Component):
             )
             denom = (t_air_ten - t_air_zero)
             if abs(denom) > 1e-9:
-                # Convert comfort operative bounds to equivalent indoor-air targets.
-                t_air_target_upper = 2.0 * comfort_upper_bound - internal_surface_temperature_in_celsius
-                t_air_target_lower = 2.0 * comfort_lower_bound - internal_surface_temperature_in_celsius
+                # Convert control comfort operative bounds to equivalent indoor-air targets.
+                t_air_target_upper = 2.0 * control_upper_bound - internal_surface_temperature_in_celsius
+                t_air_target_lower = 2.0 * control_lower_bound - internal_surface_temperature_in_celsius
 
                 phi_to_upper = phi_ten * (t_air_target_upper - t_air_zero) / denom
                 phi_to_lower = phi_ten * (t_air_target_lower - t_air_zero) / denom
 
-                # Only count "add heat" if we're currently below the upper comfort bound.
-                if operative_temperature_in_celsius < comfort_upper_bound:
+                # Only count "add heat" if we're currently below the upper control comfort bound.
+                if operative_temperature_in_celsius < control_upper_bound:
                     potential_heating_power_in_watt = max(0.0, float(phi_to_upper))
-                # Only count "remove heat" if we're currently above the lower comfort bound.
-                if operative_temperature_in_celsius > comfort_lower_bound:
+                # Only count "remove heat" if we're currently above the lower control comfort bound.
+                if operative_temperature_in_celsius > control_lower_bound:
                     potential_cooling_power_in_watt = max(0.0, -float(phi_to_lower))
 
         stsv.set_output_value(
@@ -1909,6 +1987,7 @@ class Building(cp.Component):
             )
 
         # Degree-hours contribution per timestep.
+        # Standard comfort KPIs use unshifted adaptive bounds; relaxed undertemperature uses the control lower bound.
         # Uses the timestep duration in hours (dt_h), so that summing over timesteps yields total degree-hours.
         dt_h = self.my_simulation_parameters.seconds_per_timestep / 3600.0
         # Count degree-hours only when at least one person is present.
@@ -1920,6 +1999,9 @@ class Building(cp.Component):
         temperature_under_limit_degree_hours = (
             max(0.0, comfort_lower_bound - operative_temperature_in_celsius) * dt_h * people_present
         )
+        temperature_relaxed_under_limit_degree_hours = (
+            max(0.0, control_lower_bound - operative_temperature_in_celsius) * dt_h * people_present
+        )
         stsv.set_output_value(
             self.temperature_over_temperature_degree_hours_channel,
             temperature_over_limit_degree_hours,
@@ -1927,6 +2009,10 @@ class Building(cp.Component):
         stsv.set_output_value(
             self.temperature_under_temperature_degree_hours_channel,
             temperature_under_limit_degree_hours,
+        )
+        stsv.set_output_value(
+            self.temperature_relaxed_under_temperature_degree_hours_channel,
+            temperature_relaxed_under_limit_degree_hours,
         )
 
         stsv.set_output_value(self.total_thermal_power_to_residence_channel, total_thermal_power_to_residence_in_watt)
@@ -3173,6 +3259,108 @@ class Building(cp.Component):
     # =====================================================================================================================================
     # Calculate theroretical thermal building demand according to ISO 13790 C.4
 
+    @staticmethod
+    def compute_adaptive_comfort_bounds(
+        running_average_outside_temperature_in_celsius: float,
+    ) -> tuple[float, float]:
+        """Return adaptive comfort lower/upper bounds (°C) from 48 h outdoor running mean."""
+        x = running_average_outside_temperature_in_celsius
+        if x <= 19.0:
+            comfort_lower_bound = 20.5
+        elif x >= 23.0:
+            comfort_lower_bound = 22.0
+        else:
+            comfort_lower_bound = 20.5 + (x - 19.0) * (22.0 - 20.5) / (23.0 - 19.0)
+
+        if x <= 12.0:
+            comfort_upper_bound = 24.5
+        elif x >= 17.0:
+            comfort_upper_bound = 26.5
+        else:
+            comfort_upper_bound = 24.5 + (x - 12.0) * (26.5 - 24.5) / (17.0 - 12.0)
+
+        return comfort_lower_bound, comfort_upper_bound
+
+    @staticmethod
+    def compute_strict_comfort_heating_target_in_celsius(
+        comfort_lower_bound_in_celsius: float,
+        comfort_upper_bound_in_celsius: float,
+        inner_offset_lower_in_celsius: float,
+        inner_offset_upper_in_celsius: float,
+    ) -> float:
+        """Strict lower heating target: comfort_lower + inner_offset (same as strict_comfort_band_v1)."""
+        strict_lower = comfort_lower_bound_in_celsius + max(0.0, inner_offset_lower_in_celsius)
+        strict_upper = comfort_upper_bound_in_celsius - max(0.0, inner_offset_upper_in_celsius)
+        if strict_lower > strict_upper:
+            return 0.5 * (comfort_lower_bound_in_celsius + comfort_upper_bound_in_celsius)
+        return strict_lower
+
+    def get_operative_heating_target_in_celsius(
+        self,
+        comfort_lower_bound_in_celsius: float,
+        comfort_upper_bound_in_celsius: float,
+    ) -> float:
+        """Target operative temperature for proportional heating demand."""
+        if self.buildingconfig.use_strict_comfort_band_for_operative_heating:
+            return self.compute_strict_comfort_heating_target_in_celsius(
+                comfort_lower_bound_in_celsius=comfort_lower_bound_in_celsius,
+                comfort_upper_bound_in_celsius=comfort_upper_bound_in_celsius,
+                inner_offset_lower_in_celsius=float(
+                    self.buildingconfig.operative_comfort_inner_offset_lower_in_celsius
+                ),
+                inner_offset_upper_in_celsius=float(
+                    self.buildingconfig.operative_comfort_inner_offset_upper_in_celsius
+                ),
+            )
+        return comfort_lower_bound_in_celsius
+
+    def get_total_heat_conductance_in_watt_per_kelvin(self) -> float:
+        """Total transmission + current ventilation conductance (W/K)."""
+        return (
+            float(self.my_building_information.total_heat_conductance_transmission)
+            + float(self.thermal_conductance_by_ventilation_in_watt_per_kelvin)
+        )
+
+    def calc_operative_comfort_proportional_heating_demand(
+        self,
+        operative_temperature_in_celsius: float,
+        heating_target_in_celsius: float,
+        comfort_lower_bound_in_celsius: float,
+        outside_temperature_in_celsius: float,
+    ) -> float:
+        """Heating demand from operative comfort deficit, scaled by envelope conductance and outdoor delta."""
+        comfort_deficit_in_kelvin = max(0.0, heating_target_in_celsius - operative_temperature_in_celsius)
+        if comfort_deficit_in_kelvin <= 0.0:
+            return 0.0
+
+        band_in_kelvin = max(1e-6, float(self.buildingconfig.operative_heating_proportional_band_in_celsius))
+        deficit_fraction = min(1.0, comfort_deficit_in_kelvin / band_in_kelvin)
+        if operative_temperature_in_celsius < comfort_lower_bound_in_celsius:
+            deficit_fraction = 1.0
+
+        outdoor_delta_in_kelvin = max(0.1, heating_target_in_celsius - outside_temperature_in_celsius)
+        gain = max(0.0, float(self.buildingconfig.operative_heating_proportional_gain))
+
+        demand_in_watt = (
+            self.get_total_heat_conductance_in_watt_per_kelvin()
+            * outdoor_delta_in_kelvin
+            * deficit_fraction
+            * gain
+        )
+
+        max_demand_in_watt = self.my_building_information.max_thermal_building_demand_in_watt
+        if max_demand_in_watt is not None and max_demand_in_watt > 0.0:
+            max_demand_in_watt = float(max_demand_in_watt)
+            demand_in_watt = min(demand_in_watt, max_demand_in_watt)
+            min_fraction = float(self.buildingconfig.operative_heating_minimum_fraction_below_comfort_lower)
+            if (
+                operative_temperature_in_celsius < comfort_lower_bound_in_celsius
+                and min_fraction > 0.0
+            ):
+                demand_in_watt = max(demand_in_watt, max_demand_in_watt * min(min_fraction, 1.0))
+
+        return max(0.0, demand_in_watt)
+
     def calc_theoretical_thermal_building_demand_for_building(
         self,
         set_heating_temperature_in_celsius: float,
@@ -4016,12 +4204,15 @@ class BuildingInformation:
         """Manipulate building data of heat transfer."""
         heat_capacity_of_air_per_volume_in_watt_hour_per_m3_per_kelvin = 0.34
 
+        n_air_per_h = float(self.buildingdata_ref["n_air_infiltration"].values[0])
+        if self.buildingconfig.swiss_infiltration_rate_per_h is not None:
+            n_air_per_h = float(self.buildingconfig.swiss_infiltration_rate_per_h)
+        if not self.buildingconfig.swiss_natural_ventilation_enabled():
+            n_air_per_h += float(self.buildingdata_ref["n_air_use"].values[0])
+
         self.heat_conductance_ventilation_in_watt_per_kelvin = (
             heat_capacity_of_air_per_volume_in_watt_hour_per_m3_per_kelvin
-            * (
-                float(self.buildingdata_ref["n_air_use"].values[0])
-                + float(self.buildingdata_ref["n_air_infiltration"].values[0])
-            )
+            * n_air_per_h
             * float(self.buildingdata_ref["h_room"].values[0])
             * self.scaled_conditioned_floor_area_in_m2
         )

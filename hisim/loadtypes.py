@@ -97,6 +97,7 @@ class LoadTypes(str, enum.Enum):
     PELLETS = "Pellets"
     WOOD_CHIPS = "WoodChips"
     DISTRICTHEATING = "DistrictHeating"
+    DISTRICTCOOLING = "DistrictCooling"
 
     # Controllers:
     ON_OFF = "OnOff"  # encoding: 0 means off and 1 means on

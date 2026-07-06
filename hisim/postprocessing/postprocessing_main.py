@@ -459,6 +459,11 @@ class PostProcessor:
                         total_emissions_kg = total_emissions_kg.add(kwh * factors.wood_chip_footprint_in_kg_per_kwh, fill_value=0.0)
                     elif loadtype == "DistrictHeating":
                         total_emissions_kg = total_emissions_kg.add(kwh * factors.district_heating_footprint_in_kg_per_kwh, fill_value=0.0)
+                    elif loadtype == "DistrictCooling":
+                        total_emissions_kg = total_emissions_kg.add(
+                            kwh * float(getattr(factors, "district_cooling_footprint_in_kg_per_kwh", 0.0)),
+                            fill_value=0.0,
+                        )
 
         # Add per-timestep emissions to all_results
         emissions_col_name = "PostProcessing - OperationalEmissionsTotal [Any - kgCO2eq]"
@@ -538,6 +543,49 @@ class PostProcessor:
                         payable_costs_eur = payable_costs_eur.add(
                             kwh * factors.district_heating_costs_in_euro_per_kwh, fill_value=0.0
                         )
+                    elif loadtype == "DistrictCooling":
+                        # Variable energy costs (kWh-based)
+                        payable_costs_eur = payable_costs_eur.add(
+                            kwh * float(getattr(factors, "district_cooling_costs_in_euro_per_kwh", 0.0)),
+                            fill_value=0.0,
+                        )
+
+                        # Capacity costs: EUR/(kW*a) based on peak delivered cooling power.
+                        # Compute peak kW from the DistrictCooling power output (negative sign convention).
+                        peak_kw = 0.0
+                        try:
+                            cooling_power_cols: list[int] = []
+                            for out_idx, outp in enumerate(ppdt.all_outputs):
+                                if outp.unit != lt.Units.WATT:
+                                    continue
+                                if outp.load_type != lt.LoadTypes.COOLING:
+                                    continue
+                                if outp.field_name != "ThermalOutputCoolingPower":
+                                    continue
+                                # Optional building prefix for multi-building runs
+                                if ppdt.simulation_parameters.multiple_buildings:
+                                    if not str(outp.component_name).startswith(str(comp.config.building_name) + "_"):
+                                        continue
+                                cooling_power_cols.append(out_idx)
+                            if len(cooling_power_cols) > 0:
+                                cooling_power_signed_w = ppdt.results.iloc[:, cooling_power_cols].sum(axis=1).astype(float)
+                                cooling_power_w = (-cooling_power_signed_w).clip(lower=0.0)
+                                peak_kw = float(cooling_power_w.max()) * 1e-3
+                        except Exception:
+                            peak_kw = 0.0
+
+                        cap_cost_per_kw_per_a = float(
+                            getattr(factors, "district_cooling_capacity_costs_in_euro_per_kw_per_a", 0.0) or 0.0
+                        )
+                        if peak_kw > 0.0 and cap_cost_per_kw_per_a > 0.0:
+                            total_seconds = float(ppdt.simulation_parameters.seconds_per_timestep) * float(len(ppdt.results.index))
+                            simulated_years = total_seconds / (365.0 * 24.0 * 3600.0)
+                            total_capacity_cost = peak_kw * cap_cost_per_kw_per_a * simulated_years
+                            if len(ppdt.results.index) > 0:
+                                payable_costs_eur = payable_costs_eur.add(
+                                    pd.Series(total_capacity_cost / float(len(ppdt.results.index)), index=ppdt.results.index),
+                                    fill_value=0.0,
+                                )
                     elif loadtype == "Oil":
                         if comp.config.heating_value_of_fuel_in_kwh_per_liter is None:
                             log.warning(

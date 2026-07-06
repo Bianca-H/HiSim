@@ -194,13 +194,15 @@ class Simulator:
             else:
                 # if not, build a flat result path itself
                 # Naming scheme:
-                # <setup_without_household>_<ARCH>_<WEATHER>_<MMDD>_<HHMMSS>
+                # <setup>_<ARCH>_<WEATHER>_<25|50>_[<SCENARIO_TAGS>_]<MMDD>_<HHMMSS>
                 setup_name = self.module_filename
                 setup_name_clean = setup_name.replace("household", "").replace("Household", "").replace("HOUSEHOLD", "")
                 setup_name_clean = setup_name_clean.strip("_- ")
 
                 arch_tag = cli_overrides.get_used_value("ARCH") or cli_overrides.get_override("ARCH") or "NA"
                 weather_tag = cli_overrides.get_used_value("WEATHER") or cli_overrides.get_override("WEATHER") or "NA"
+                horizon_tag = cli_overrides.get_result_directory_horizon_tag()
+                scenario_tag = cli_overrides.get_result_directory_scenario_tag()
                 if arch_tag == "NA":
                     log.warning("No ARCH information recorded for result folder naming. Using NA.")
                 if weather_tag == "NA":
@@ -211,7 +213,7 @@ class Simulator:
                 ResultPathProviderSingleton().set_important_result_path_information(
                     module_directory=self.module_directory,
                     model_name=setup_name_clean,
-                    variant_name=f"{arch_tag}_{weather_tag}_",
+                    variant_name=f"{arch_tag}_{weather_tag}_{horizon_tag}{scenario_tag}",
                     scenario_hash_string=None,
                     sorting_option=SortingOptionEnum.FLAT,
                 )

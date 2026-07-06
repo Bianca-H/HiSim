@@ -8,7 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, List
+from typing import Any, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -1201,34 +1201,14 @@ def read_test_reference_year_data(weatherconfig: WeatherConfig, simulation_param
 def read_custom_weather_csv(filepath: str, simulation_parameters: SimulationParameters) -> pd.DataFrame:
     """Read a user-provided weather CSV and map it to HiSim weather inputs.
 
-    Expected columns (from the user description):
-    - station,time.yy,time.mm,time.dd,time.hh
-    - temp,relhum,vappres,dewpt,mixratio,wetbulb,enthalpy,precip,airpres,winddir,windmean,windmax
-    - rad.global,rad.direct,rad.diffus
-
-    Only a subset is required for the HiSim `Weather` component:
-    - temperature -> column `temp`
-    - wind speed -> column `windmean`
-    - air pressure -> column `airpres` (assumed hPa unless it looks like Pa)
-    - irradiances -> columns `rad.global` (GHI), `rad.direct` (DNI), `rad.diffus` (DHI)
+    Supports the full Swiss custom CSV schema (temp, windmean, airpres, rad.*) and the
+    reduced RCP85 schema (tre200h0, fkl010h0, gls, str.direkt, str.diffus).
     """
     data = pd.read_csv(filepath, encoding="utf-8")
-
-    required_columns = [
-        "time.yy",
-        "time.mm",
-        "time.dd",
-        "time.hh",
-        "temp",
-        "windmean",
-        "airpres",
-        "rad.global",
-        "rad.direct",
-        "rad.diffus",
-    ]
-    missing = [c for c in required_columns if c not in data.columns]
-    if missing:
-        raise ValueError(f"Custom weather CSV missing required columns: {missing}")
+    column_map = _resolve_custom_weather_csv_columns(data.columns)
+    missing_time = [c for c in ("time.mm", "time.dd", "time.hh") if c not in data.columns]
+    if missing_time:
+        raise ValueError(f"Custom weather CSV missing required time columns: {missing_time}")
 
     # Parse timestamps from month/day/hour columns and map them to the simulation period.
     #
@@ -1301,17 +1281,23 @@ def read_custom_weather_csv(filepath: str, simulation_parameters: SimulationPara
     # keep the first occurrence.
     data = data[~data.index.duplicated(keep="first")]
 
-    temperature = data["temp"].astype(float)
-    wspd = data["windmean"].astype(float)
+    temperature = data[column_map["temp"]].astype(float)
+    wspd = data[column_map["windmean"]].astype(float)
 
-    # Convert pressure to hPa if it appears to be in Pa.
-    pressure_raw = data["airpres"].astype(float)
-    pressure_median = float(pressure_raw.median())
-    pressure = pressure_raw / 100.0 if pressure_median > 2000 else pressure_raw
+    if column_map["airpres"] is not None:
+        pressure_raw = data[column_map["airpres"]].astype(float)
+        pressure_median = float(pressure_raw.median())
+        pressure = pressure_raw / 100.0 if pressure_median > 2000 else pressure_raw
+    else:
+        pressure = pd.Series(
+            _reference_airpres_hpa_for_custom_csv(filepath),
+            index=data.index,
+            dtype=float,
+        )
 
-    ghi = data["rad.global"].astype(float)
-    dni = data["rad.direct"].astype(float)
-    dhi = data["rad.diffus"].astype(float)
+    ghi = data[column_map["rad.global"]].astype(float)
+    dni = data[column_map["rad.direct"]].astype(float)
+    dhi = data[column_map["rad.diffus"]].astype(float)
 
     # Map to internal naming expected by HiSim weather processing.
     out = pd.DataFrame(
@@ -1336,6 +1322,55 @@ def read_custom_weather_csv(filepath: str, simulation_parameters: SimulationPara
         )
 
     return out
+
+
+# Mean station air pressure [hPa] from each location's 2023_DRY reference file.
+_CUSTOM_CSV_REFERENCE_AIRPRES_HPA = {
+    "ZUESTA": 969.738550228311,
+    "BASSTA": 987.771267123288,
+    "KLO": 966.365148401822,
+    "RUE": 947.664805936076,
+}
+_CUSTOM_CSV_COLUMN_ALIASES = {
+    "temp": ("temp", "tre200h0"),
+    "windmean": ("windmean", "fkl010h0"),
+    "airpres": ("airpres", "prestahs"),
+    "rad.global": ("rad.global", "gre000h0", "gls"),
+    "rad.direct": ("rad.direct", "str.direkt"),
+    "rad.diffus": ("rad.diffus", "str.diffus"),
+}
+
+
+def _resolve_custom_weather_csv_columns(columns: Any) -> dict[str, Optional[str]]:
+    """Map logical weather columns to the actual names present in a custom CSV file."""
+    available = {str(col).strip(): str(col).strip() for col in columns}
+    resolved: dict[str, Optional[str]] = {}
+    missing: list[str] = []
+    for logical_name, aliases in _CUSTOM_CSV_COLUMN_ALIASES.items():
+        actual_name = next((alias for alias in aliases if alias in available), None)
+        if actual_name is None and logical_name != "airpres":
+            missing.append(logical_name)
+        resolved[logical_name] = actual_name
+    if missing:
+        raise ValueError(f"Custom weather CSV missing required columns: {missing}")
+    return resolved
+
+
+def _reference_airpres_hpa_for_custom_csv(filepath: str) -> float:
+    """Return reference mean air pressure [hPa] for reduced RCP85 CSVs without a pressure column."""
+    base = os.path.basename(filepath).upper()
+    if "ZUESTA" in base or "NABZUE" in base:
+        return _CUSTOM_CSV_REFERENCE_AIRPRES_HPA["ZUESTA"]
+    if "BASSTA" in base or "BKLI" in base:
+        return _CUSTOM_CSV_REFERENCE_AIRPRES_HPA["BASSTA"]
+    if "KLO" in base:
+        return _CUSTOM_CSV_REFERENCE_AIRPRES_HPA["KLO"]
+    if "RUE" in base:
+        return _CUSTOM_CSV_REFERENCE_AIRPRES_HPA["RUE"]
+    raise ValueError(
+        f"Cannot infer reference air pressure for custom weather CSV {filepath!r}. "
+        "Add an air pressure column or use a known Swiss location filename."
+    )
 
 
 def try_get_lat_lon_from_filename(path_or_filename: str) -> tuple[float, float] | None:

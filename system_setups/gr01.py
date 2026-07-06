@@ -41,7 +41,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
 
     # =============================================================================================================================
     # Set simulation parameters
-    year = 2021
+    year = cli_overrides.get_economic_year()
     seconds_per_timestep = 900.0  # 15 min timesteps (3600s would be 1h, but can cause stability issues with large HP time constants)
 
     if my_simulation_parameters is None:
@@ -74,30 +74,31 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     cli_overrides.set_used_value("ARCH", arch_used)
     cli_overrides.set_used_value("WEATHER", weather_used)
 
+    time_horizon_used = cli_overrides.get_time_horizon()
+    cli_overrides.set_used_value("TIME_HORIZON", time_horizon_used)
+
+    active_scenarios = cli_overrides.get_active_scenarios()
+    cli_overrides.set_used_value(
+        "SCENARIO",
+        ",".join(sorted(active_scenarios)) if active_scenarios else "none",
+    )
+    if cli_overrides.has_scenario(cli_overrides.SCENARIO_FOSSIL_CRISIS):
+        log.information(
+            "Applied scenario SCENARIO=fossil_Crisis: elevated gas/oil prices and lowered adaptive comfort lower bound."
+        )
+    if cli_overrides.has_scenario(cli_overrides.SCENARIO_HEATWAVE):
+        log.information(
+            f"Applied scenario SCENARIO=heatwave with TIME_HORIZON={time_horizon_used}: using heatwave future weather file."
+        )
+
     # =============================================================================================================================
     # Build Weather
-    my_weather_config = weather.WeatherConfig.get_default(
-        location_entry=getattr(weather.LocationEnum, default_weather)
+    my_weather_config = cli_overrides.apply_weather_location_override(
+        weather_module=weather,
+        weather_value=weather_used,
+        name="Weather",
+        building_name="BUI1",
     )
-    if weather_override is not None:
-        try:
-            my_weather_config = cli_overrides.apply_weather_location_override(
-                weather_module=weather,
-                weather_value=weather_override,
-                name="Weather",
-                building_name="BUI1",
-            )
-            log.information(f"Applied CLI override WEATHER={weather_override} to weather configuration.")
-        except Exception:
-            log.warning(
-                f"CLI override WEATHER={weather_override} was provided, but no matching "
-                f"`LocationEnum.{weather_override}` exists in `hisim.components.weather`. Using default weather config."
-            )
-            my_weather_config = weather.WeatherConfig.get_default(
-                location_entry=getattr(weather.LocationEnum, default_weather)
-            )
-            weather_used = default_weather
-            cli_overrides.set_used_value("WEATHER", weather_used)
     my_weather = weather.Weather(config=my_weather_config, my_simulation_parameters=my_simulation_parameters)
 
     # =============================================================================================================================
@@ -136,9 +137,11 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
 
     # Ensure building demand is based on (at least) the comfort-lower level used in basic_household.
     # The adaptive comfort bounds are exposed as outputs, but the building demand setpoint is driven by these config values.
-    my_building_config.set_heating_temperature_in_celsius = 20.5
+    my_building_config.set_heating_temperature_in_celsius = cli_overrides.DEFAULT_HEATING_SETPOINT_IN_CELSIUS
+    cli_overrides.apply_scenario_building_settings(my_building_config)
     # Prevent any cooling demand in BO01 (no cooling system in this variant).
     my_building_config.set_cooling_temperature_in_celsius = 99.0
+    cli_overrides.apply_swiss_sia_natural_ventilation_settings(my_building_config)
 
     my_building_information = building.BuildingInformation(config=my_building_config)
     my_building = building.Building(config=my_building_config, my_simulation_parameters=my_simulation_parameters)
@@ -312,17 +315,6 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         config=electricity_meter.ElectricityMeterConfig.get_electricity_meter_default_config(),
     )
 
-    # Comfort-band heating demand controller: derive heating demand from operative temperature vs adaptive lower setpoint.
-    my_comfort_heating_demand = comfort_band_heating_demand.ComfortBandHeatingDemand(
-        my_simulation_parameters=my_simulation_parameters,
-        config=comfort_band_heating_demand.ComfortBandHeatingDemandConfig.get_default_config(
-            building_name="BUI1",
-            name="ComfortBandHeatingDemand",
-            max_heating_power_in_watt=float(connected_load_w),
-            proportional_gain_in_watt_per_kelvin=200000.0,
-        ),
-    )
-
     # Strict comfort-band demand logic (same thermostat logic as in basic_household)
     my_strict_comfort_controller = generic_heat_pump.GenericHeatPumpController(
         config=generic_heat_pump.GenericHeatPumpControllerConfig(
@@ -382,7 +374,19 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_building.TemperatureComfortLowerBound,
     )
 
-    # Comfort-band driven heating demand
+    # Proportional comfort-band heating demand (TOP undershoot vs adaptive comfort lower bound).
+    max_sh_power_w = float(my_building_information.max_thermal_building_demand_in_watt or 0.0)
+    proportional_band_k = 0.5  # full request at 0.5 K below lower comfort bound
+    my_comfort_heating_demand = comfort_band_heating_demand.ComfortBandHeatingDemand(
+        my_simulation_parameters=my_simulation_parameters,
+        config=comfort_band_heating_demand.ComfortBandHeatingDemandConfig.get_default_config(
+            building_name="BUI1",
+            name="ComfortBandHeatingDemand",
+            max_heating_power_in_watt=max_sh_power_w,
+            proportional_gain_in_watt_per_kelvin=(max_sh_power_w / max(proportional_band_k, 1e-6)),
+        ),
+    )
+
     my_comfort_heating_demand.connect_input(
         my_comfort_heating_demand.OperativeTemperature,
         my_building.component_name,
@@ -390,8 +394,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
     my_comfort_heating_demand.connect_input(
         my_comfort_heating_demand.LowerComfortSetpoint,
-        my_strict_comfort_controller.component_name,
-        my_strict_comfort_controller.AppliedControlLowerTemperature,
+        my_building.component_name,
+        my_building.TemperatureComfortLowerBound,
     )
     my_comfort_heating_demand.connect_input(
         my_comfort_heating_demand.HeatingAllowed,

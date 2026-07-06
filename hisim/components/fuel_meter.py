@@ -97,6 +97,7 @@ class FuelMeter(DynamicComponent):
             lt.LoadTypes.PELLETS,
             lt.LoadTypes.WOOD_CHIPS,
             lt.LoadTypes.DISTRICTHEATING,
+            lt.LoadTypes.DISTRICTCOOLING,
         ]:
             raise ValueError(
                 f"FuelMeter {self.component_name} has invalid fuel loadtype: {self.config.fuel_loadtype}. "
@@ -130,8 +131,12 @@ class FuelMeter(DynamicComponent):
             output_description=f"here a description for {self.CumulativeConsumption} will follow.",
         )
 
-        self.add_dynamic_default_connections(self.get_default_connections_from_generic_district_heating())
-        self.add_dynamic_default_connections(self.get_default_connections_from_generic_district_cooling())
+        # Only connect the relevant default sources for this meter type.
+        # This allows running district heating + district cooling with separate meters (and separate tariffs).
+        if self.config.fuel_loadtype == lt.LoadTypes.DISTRICTHEATING:
+            self.add_dynamic_default_connections(self.get_default_connections_from_generic_district_heating())
+        if self.config.fuel_loadtype == lt.LoadTypes.DISTRICTCOOLING:
+            self.add_dynamic_default_connections(self.get_default_connections_from_generic_district_cooling())
         self.add_dynamic_default_connections(self.get_default_connections_from_generic_boiler())
 
     def get_default_connections_from_generic_district_heating(
@@ -328,6 +333,13 @@ class FuelMeter(DynamicComponent):
         elif self.config.fuel_loadtype == lt.LoadTypes.DISTRICTHEATING:
             co2_per_unit = emissions_and_cost_factors.district_heating_footprint_in_kg_per_kwh
             euro_per_unit = emissions_and_cost_factors.district_heating_costs_in_euro_per_kwh
+            co2_per_simulated_period_in_kg = total_heat_consumed_in_kwh * co2_per_unit
+            opex_cost_per_simulated_period_in_euro = total_heat_consumed_in_kwh * euro_per_unit
+        elif self.config.fuel_loadtype == lt.LoadTypes.DISTRICTCOOLING:
+            # District cooling is metered as delivered cooling energy [kWh] (positive magnitude).
+            # Costs and footprints are provided as kWh-based factors (often derived from CHF tariffs).
+            co2_per_unit = float(getattr(emissions_and_cost_factors, "district_cooling_footprint_in_kg_per_kwh", 0.0))
+            euro_per_unit = float(getattr(emissions_and_cost_factors, "district_cooling_costs_in_euro_per_kwh", 0.0))
             co2_per_simulated_period_in_kg = total_heat_consumed_in_kwh * co2_per_unit
             opex_cost_per_simulated_period_in_euro = total_heat_consumed_in_kwh * euro_per_unit
         else:

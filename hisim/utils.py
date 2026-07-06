@@ -211,8 +211,24 @@ def convert_lpg_timestep_to_utc(data: List[int], year: int, seconds_per_timestep
     return data
 
 
+LPG_SCHEDULE_REFERENCE_YEAR = 2021
+
+
+def get_lpg_schedule_year(simulation_year: int) -> int:
+    """Return calendar year for LPG occupancy/mobility schedules.
+
+    LPG profiles rely on pytz DST transition data; years beyond the bundled
+    timezone database have no transitions and break UTC conversion.
+    """
+    if simulation_year > 2025:
+        return LPG_SCHEDULE_REFERENCE_YEAR
+    return simulation_year
+
+
 def convert_lpg_data_to_utc(data: pd.DataFrame, year: int) -> pd.DataFrame:
     """Transform LPG data from local time (not having explicit time shifts) to UTC."""
+    year = get_lpg_schedule_year(year)
+
     # convert Time information to pandas datetime and make it to index
     data.index = pd.DatetimeIndex(pd.to_datetime(data["Time"]))
     lastdate = data.index[-1]
@@ -220,6 +236,8 @@ def convert_lpg_data_to_utc(data: pd.DataFrame, year: int) -> pd.DataFrame:
     # find out time shifts of selected year
     timeshifts = pytz.timezone("Europe/Berlin")._utc_transition_times  # type: ignore # pylint: disable=W0212
     timeshifts = [elem for elem in timeshifts if elem.year == year]
+    if len(timeshifts) < 2:
+        raise ValueError(f"Cannot determine DST transitions for LPG UTC conversion (year={year}).")
 
     # delete hour in spring if neceary:
     if lastdate > timeshifts[0]:
