@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from hisim import cli_overrides, heating_system_selection, loadtypes, log
-from hisim.postprocessingoptions import PostProcessingOptions
 from hisim.simulator import SimulationParameters
 
 from hisim.components import electricity_meter
@@ -49,13 +48,7 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             year=year, seconds_per_timestep=seconds_per_timestep
         )
 
-    batch_open_explorer = (cli_overrides.get_override("BATCH_OPEN_EXPLORER") or "").strip()
-    if batch_open_explorer == "0":
-        my_simulation_parameters.post_processing_options = [
-            opt
-            for opt in my_simulation_parameters.post_processing_options
-            if opt != PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER
-        ]
+    cli_overrides.apply_batch_open_explorer_setting(my_simulation_parameters)
 
     my_sim.set_simulation_parameters(my_simulation_parameters)
 

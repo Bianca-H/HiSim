@@ -208,6 +208,26 @@ def get_result_directory_scenario_tag() -> str:
     return "_".join(tags) + "_"
 
 
+def apply_batch_open_explorer_setting(my_simulation_parameters: Any) -> None:
+    """Open the result folder in Explorer for single runs and the first batch run.
+
+    ``enable_minimal_variant_artifacts()`` does not include ``OPEN_DIRECTORY_IN_EXPLORER``.
+    Batch runners pass ``BATCH_OPEN_EXPLORER=0`` for subsequent runs to suppress it.
+    """
+    from hisim.postprocessingoptions import PostProcessingOptions
+
+    batch_open_explorer = (get_override("BATCH_OPEN_EXPLORER") or "").strip()
+    set_used_value("BATCH_OPEN_EXPLORER", batch_open_explorer if batch_open_explorer else "1")
+    if batch_open_explorer == "0":
+        my_simulation_parameters.post_processing_options = [
+            opt
+            for opt in my_simulation_parameters.post_processing_options
+            if opt != PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER
+        ]
+    elif PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER not in my_simulation_parameters.post_processing_options:
+        my_simulation_parameters.post_processing_options.append(PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER)
+
+
 def apply_fossil_crisis_scenario_settings(building_config: Any) -> None:
     """Lower the adaptive heating control lower bound; upper bound and KPI degree-hours keep standard values."""
     building_config.control_comfort_lower_bound_shift_in_celsius = (

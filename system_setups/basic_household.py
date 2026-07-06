@@ -16,8 +16,6 @@ from hisim import loadtypes
 from hisim import cli_overrides
 from hisim import log
 from hisim import heating_system_selection
-from hisim.postprocessingoptions import PostProcessingOptions
-
 
 __authors__ = "Vitor Hugo Bellotto Zago, Noah Pflugradt"
 __copyright__ = "Copyright 2022, FZJ-IEK-3"
@@ -83,13 +81,7 @@ def setup_function(
             #year=year, seconds_per_timestep=seconds_per_timestep
         #)
 
-    batch_open_explorer = (cli_overrides.get_override("BATCH_OPEN_EXPLORER") or "").strip()
-    if batch_open_explorer == "0":
-        my_simulation_parameters.post_processing_options = [
-            opt
-            for opt in my_simulation_parameters.post_processing_options
-            if opt != PostProcessingOptions.OPEN_DIRECTORY_IN_EXPLORER
-        ]
+    cli_overrides.apply_batch_open_explorer_setting(my_simulation_parameters)
 
     my_sim.set_simulation_parameters(my_simulation_parameters)
     print(my_simulation_parameters.post_processing_options)
