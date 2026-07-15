@@ -358,7 +358,39 @@ class EmissionFactorsAndCostsForFuelsConfig:
         config = EmissionFactorsAndCostsForFuelsConfig(**opex_techno_economic_parameters[country][year])
         from hisim import cli_overrides
 
+        if cli_overrides.has_scenario(cli_overrides.SCENARIO_FINANCIAL_SHOCK):
+            base_year = cli_overrides.PRESENT_ECONOMIC_YEAR
+            if year != cli_overrides.FUTURE_ECONOMIC_YEAR:
+                raise ValueError(
+                    "SCENARIO=financial_Shock requires economic year "
+                    f"{cli_overrides.FUTURE_ECONOMIC_YEAR} (TIME_HORIZON=future); got year={year}."
+                )
+            if base_year not in opex_techno_economic_parameters[country]:
+                raise KeyError(
+                    f"SCENARIO=financial_Shock needs base-year {base_year} OPEX factors for country '{country}'."
+                )
+            base_params = opex_techno_economic_parameters[country][base_year]
+            progress = cli_overrides.FINANCIAL_SHOCK_RENEWABLE_PROGRESS_FACTOR
+            for field_name in cli_overrides.FINANCIAL_SHOCK_FOOTPRINT_FIELDS:
+                if not hasattr(config, field_name) or field_name not in base_params:
+                    continue
+                base_value = float(base_params[field_name])
+                target_value = float(getattr(config, field_name))
+                # Only revise carriers that become cleaner under the planned 2050 mix.
+                if target_value >= base_value:
+                    continue
+                setattr(
+                    config,
+                    field_name,
+                    cli_overrides.incomplete_renewable_progress_value(
+                        base_value=base_value,
+                        target_value=target_value,
+                        progress_factor=progress,
+                    ),
+                )
+
         if cli_overrides.has_scenario(cli_overrides.SCENARIO_FOSSIL_CRISIS):
+            config.electricity_costs_in_euro_per_kwh *= cli_overrides.FOSSIL_CRISIS_ELECTRICITY_PRICE_MULTIPLIER
             config.gas_costs_in_euro_per_kwh *= cli_overrides.FOSSIL_CRISIS_GAS_PRICE_MULTIPLIER
             config.oil_costs_in_euro_per_l *= cli_overrides.FOSSIL_CRISIS_OIL_PRICE_MULTIPLIER
         return config

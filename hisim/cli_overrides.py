@@ -63,12 +63,14 @@ DEFAULT_OPERATIVE_COMFORT_INNER_OFFSET_UPPER_IN_CELSIUS = 0.5
 DEFAULT_HEATING_DISABLED_ABOVE_RUNNING_MEAN_OUTDOOR_TEMPERATURE_IN_CELSIUS = 18.0
 
 # Simulation scenarios (CLI: SCENARIO=...; default status quo when omitted or SCENARIO=none).
-# Comma-separated values are supported, e.g. SCENARIO=fossil_Crisis,heatwave
+# Comma-separated values are supported, e.g. SCENARIO=fossil_Crisis,heatwave,financial_Shock
 SCENARIO_FOSSIL_CRISIS = "fossil_Crisis"
 SCENARIO_HEATWAVE = "heatwave"
+SCENARIO_FINANCIAL_SHOCK = "financial_Shock"
 _KNOWN_SCENARIOS = {
     SCENARIO_FOSSIL_CRISIS.lower(): SCENARIO_FOSSIL_CRISIS,
     SCENARIO_HEATWAVE.lower(): SCENARIO_HEATWAVE,
+    SCENARIO_FINANCIAL_SHOCK.lower(): SCENARIO_FINANCIAL_SHOCK,
 }
 
 # Time horizon (CLI: TIME_HORIZON=present|future; default present → result tag 25, future → 50).
@@ -83,21 +85,37 @@ CH_CUSTOM_CSV_WEATHER_LOCATIONS = frozenset({"ZUESTA", "BASSTA", "KLO", "RUE"})
 DEFAULT_HEATING_SETPOINT_IN_CELSIUS = 20.5
 # Shift adaptive comfort lower bound down for fossil crisis (control only; upper bound and KPI degree-hours stay unshifted).
 FOSSIL_CRISIS_COMFORT_LOWER_BOUND_SHIFT_IN_CELSIUS = -1.5 # based on Jaeger-Erben et. al (225): Policies for times of disruptions: How households in Europe dealt with the energy crisis in the winter 2022/2023
+FOSSIL_CRISIS_ELECTRICITY_PRICE_MULTIPLIER = 1.29 # Swiss difference between 2022 and 2023 electricity prices based on ElComElectricityPrices2021; applied for present and future fossil crisis runs
 FOSSIL_CRISIS_GAS_PRICE_MULTIPLIER = 1.95 # based on Jaeger-Erben et. al (225): Policies for times of disruptions: How households in Europe dealt with the energy crisis in the winter 2022/2023; Swiss difference between 2021 and 2022
 FOSSIL_CRISIS_OIL_PRICE_MULTIPLIER = 1.95 # based on Jaeger-Erben et. al (225): Policies for times of disruptions: How households in Europe dealt with the energy crisis in the winter 2022/2023; Swiss difference between 2021 and 2022
+# Financial shock (future only): renewable-mix progress from present→2050 reaches only this share of the planned path.
+# Based on the post 25 years (2005-2030) renewable-share shortfall vs linear expectation (84.2%).
+FINANCIAL_SHOCK_RENEWABLE_PROGRESS_FACTOR = 0.842
+# Footprint fields with a mixed energy carrier at the base (progress toward cleaner 2050 mix is incomplete).
+FINANCIAL_SHOCK_FOOTPRINT_FIELDS = (
+    "electricity_footprint_in_kg_per_kwh",
+    "district_heating_footprint_in_kg_per_kwh",
+    "district_cooling_footprint_in_kg_per_kwh",
+)
 
 
 def get_active_scenarios() -> Set[str]:
-    """Return all active scenario flags from comma-separated CLI override SCENARIO."""
+    """Return all active scenario flags from comma-separated CLI override SCENARIO.
+
+    Accepts both ``SCENARIO=fossil_Crisis,heatwave`` and JSON-list-like strings
+    such as ``SCENARIO=['fossil_Crisis', 'heatwave']``.
+    """
     raw = get_override("SCENARIO")
     if raw is None:
         return set()
     normalized = raw.strip()
     if normalized.upper() in ("", "NONE", "NULL"):
         return set()
+    # Tolerate accidental Python/JSON list serialization from batch configs.
+    normalized = normalized.strip("[]")
     active: Set[str] = set()
     for token in normalized.split(","):
-        part = token.strip()
+        part = token.strip().strip("'\"")
         if not part:
             continue
         canonical = _KNOWN_SCENARIOS.get(part.lower())
@@ -150,6 +168,18 @@ def validate_ch_batch_cli_configuration() -> None:
             "SCENARIO=heatwave requires TIME_HORIZON=future. "
             "No present-day heatwave weather file is available."
         )
+    if has_scenario(SCENARIO_FINANCIAL_SHOCK) and get_time_horizon() != TIME_HORIZON_FUTURE:
+        raise ValueError(
+            "SCENARIO=financial_Shock requires TIME_HORIZON=future. "
+            "The financial-shock renewable shortfall is defined relative to the 2050 pathway."
+        )
+    if has_scenario(SCENARIO_FINANCIAL_SHOCK):
+        log.information(
+            "Applied scenario SCENARIO=financial_Shock: "
+            f"future mixed-carrier footprints reach only "
+            f"{100.0 * FINANCIAL_SHOCK_RENEWABLE_PROGRESS_FACTOR:.1f}% of planned 2021->2050 progress; "
+            "2050 fuel costs unchanged."
+        )
 
 
 def get_custom_csv_filename_for_location(weather_location: str) -> str:
@@ -184,8 +214,10 @@ def get_custom_csv_filename_for_location(weather_location: str) -> str:
 
 
 # Short tags appended to flat result folder names (see simulator.prepare_simulation_directory).
+# With TIME_HORIZON=future → `50_ES_` (documents ES50); stacking e.g. `50_FC_ES_HW_`.
 SCENARIO_RESULT_DIRECTORY_TAGS = {
     SCENARIO_FOSSIL_CRISIS: "FC",
+    SCENARIO_FINANCIAL_SHOCK: "ES",
     SCENARIO_HEATWAVE: "HW",
 }
 
@@ -196,9 +228,9 @@ def get_result_directory_horizon_tag() -> str:
 
 
 def get_result_directory_scenario_tag() -> str:
-    """Return concatenated scenario suffixes for result paths, e.g. 'FC_HW_'."""
+    """Return concatenated scenario suffixes for result paths, e.g. 'FC_ES_HW_'."""
     tags: list[str] = []
-    for scenario_name in (SCENARIO_FOSSIL_CRISIS, SCENARIO_HEATWAVE):
+    for scenario_name in (SCENARIO_FOSSIL_CRISIS, SCENARIO_FINANCIAL_SHOCK, SCENARIO_HEATWAVE):
         if has_scenario(scenario_name):
             tag = SCENARIO_RESULT_DIRECTORY_TAGS.get(scenario_name)
             if tag:
@@ -206,6 +238,11 @@ def get_result_directory_scenario_tag() -> str:
     if not tags:
         return ""
     return "_".join(tags) + "_"
+
+
+def incomplete_renewable_progress_value(base_value: float, target_value: float, progress_factor: float) -> float:
+    """Return incomplete progress from base→target: base - factor * (base - target)."""
+    return base_value - float(progress_factor) * (base_value - target_value)
 
 
 def apply_batch_open_explorer_setting(my_simulation_parameters: Any) -> None:

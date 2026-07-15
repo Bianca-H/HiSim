@@ -48,6 +48,17 @@ def _default_cwd() -> Path:
     return _repo_root() / "system_setups"
 
 
+def _format_override_value(value: Any) -> str:
+    """Serialize an override value for CLI KEY=VALUE args.
+
+    Lists/tuples become comma-separated (e.g. SCENARIO=[a,b] → SCENARIO=a,b).
+    """
+    if isinstance(value, (list, tuple)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return ",".join(parts)
+    return str(value).strip()
+
+
 def _iter_matrix_runs(
     hisim_main: Path,
     setup: str,
@@ -63,7 +74,7 @@ def _iter_matrix_runs(
         key = str(k).strip().upper()
         if not key:
             continue
-        base_override_args.append(f"{key}={str(v).strip()}")
+        base_override_args.append(f"{key}={_format_override_value(v)}")
     run_counter = int(start_index)
     for arch in arch_values:
         for weather in weather_values:

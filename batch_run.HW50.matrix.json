@@ -5,7 +5,7 @@
   "weather": ["ZUESTA", "KLO", "BASSTA", "RUE"],
   "overrides": {
     "HEATGEN_SIZING": "IDEAL_LOOKUP",
-    "SCENARIO": "fossil_Crisis",
+    "SCENARIO": "heatwave",
     "TIME_HORIZON": "future"
   }
 }
