@@ -13,6 +13,7 @@ from typing import Any, Optional, List, Dict, Tuple
 import pandas as pd
 
 from hisim import log
+from hisim import heating_system_selection
 from hisim import utils
 from hisim.component import ComponentOutput
 from hisim.components.configuration import EmissionFactorsAndCostsForFuelsConfig
@@ -1731,12 +1732,22 @@ class PostProcessor:
                 )
                 deviation_from_minimum_indoor_temperature_in_celsius_hour = get_kpi_entries_for_building_sizer(
                     data=kpi_collection_dict,
-                    target_key="Temperature deviation of building indoor air temperature being below set temperature 20.0 Celsius",
+                    target_key=heating_system_selection.KPI_UNDERTEMPERATURE_DEGREE_HOURS_BELOW_ADAPTIVE_LOWER,
                 )
+                if deviation_from_minimum_indoor_temperature_in_celsius_hour is None:
+                    deviation_from_minimum_indoor_temperature_in_celsius_hour = get_kpi_entries_for_building_sizer(
+                        data=kpi_collection_dict,
+                        target_key="Temperature deviation of building indoor air temperature being below set temperature 20.0 Celsius",
+                    )
                 deviation_from_maximum_indoor_temperature_in_celsius_hour = get_kpi_entries_for_building_sizer(
                     data=kpi_collection_dict,
-                    target_key="Temperature deviation of building indoor air temperature being above set temperature 25.0 Celsius",
+                    target_key=heating_system_selection.KPI_OVERTEMPERATURE_DEGREE_HOURS_ABOVE_ADAPTIVE_UPPER,
                 )
+                if deviation_from_maximum_indoor_temperature_in_celsius_hour is None:
+                    deviation_from_maximum_indoor_temperature_in_celsius_hour = get_kpi_entries_for_building_sizer(
+                        data=kpi_collection_dict,
+                        target_key="Temperature deviation of building indoor air temperature being above set temperature 25.0 Celsius",
+                    )
 
                 # initialize json interface to pass kpi's to building_sizer
                 kpi_config = KPIConfig(

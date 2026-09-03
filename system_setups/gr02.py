@@ -304,10 +304,11 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
 
     # KPI splits for postprocessing (aligned across HP/BO/BG/BP/GR setups):
-    # - `HeatGeneratorTotalThermalPower`: district SH + district cooling (negative during cooling); no DHW.
+    # - `HeatGeneratorTotalThermalPower`: zone-received space heating/cooling via Building.ActualThermalBuildingSupply
+    #   (positive=heating to zone, negative=cooling to zone); no DHW.
     # - `HeatGeneratorPlantDhwThermalPower`: generator-side DHW (fossil / HP / district).
     # - `SolarDhwThermalPower`: solar thermal into DHW (0 W here — no solar primary on DHW).
-    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForTwoInputs(
+    my_heatgen_total_thermal_power = sumbuilder.SumBuilderForOneInput(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
             building_name="BUI1",
@@ -398,11 +399,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             comfort_band_inner_offset_upper_in_celsius=0.5,
             heating_disabled_above_running_mean_outdoor_temperature_in_celsius=18.0,
             # Match HP02/BO02: enable cooling when 48h running-mean outdoor temp is high enough
-            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=22.0,
+            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=(
+                cli_overrides.DEFAULT_COOLING_ENABLED_ABOVE_DAILY_MEAN_OUTDOOR_TEMPERATURE_IN_CELSIUS
+            ),
         ),
         my_simulation_parameters=my_simulation_parameters,
     )
-    my_strict_comfort_controller.connect_only_predefined_connections(my_building)
+    my_strict_comfort_controller.connect_only_predefined_connections(my_building, my_weather)
     my_strict_comfort_controller.connect_input(
         my_strict_comfort_controller.ElectricityInput,
         my_electricity_meter.component_name,
@@ -618,15 +621,11 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_dhw_storage.WaterMassFlowRateOfDHW,
     )
 
+    # Zone-received space heating (+) / cooling (-) for cross-setup comparable thermal KPIs.
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput1,
-        my_district_heating.component_name,
-        my_district_heating.ThermalOutputShPower,
-    )
-    my_heatgen_total_thermal_power.connect_input(
-        my_heatgen_total_thermal_power.SumInput2,
-        my_district_cooling.component_name,
-        my_district_cooling.ThermalOutputCoolingPower,
+        my_building.component_name,
+        my_building.ActualThermalBuildingSupply,
     )
     my_heatgen_plant_dhw_thermal_power.connect_input(
         my_heatgen_plant_dhw_thermal_power.SumInput1,

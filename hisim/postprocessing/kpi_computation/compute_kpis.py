@@ -223,8 +223,9 @@ class KpiGenerator(JSONWizard, KpiPreparation):
             description="Yearly peak DHW heating power divided by yearly average DHW heating power.",
         )
 
-        # Cooling (aggregate all COOLING load outputs, use magnitude for peak/avg)
-        cooling_indices: list[int] = []
+        # Cooling:
+        # Prefer actual cooling supplied to the building (zone-received), analogous to ActualHeatingSupply.
+        cooling_power_w = None
         for idx, outp in enumerate(self.all_outputs):
             if not (
                 building_objects_in_district == outp.component_name.split("_")[0]
@@ -233,20 +234,37 @@ class KpiGenerator(JSONWizard, KpiPreparation):
                 continue
             if outp.unit != Units.WATT:
                 continue
-            if outp.load_type != LoadTypes.COOLING:
-                continue
-            cooling_indices.append(idx)
-        if len(cooling_indices) > 0:
-            cooling_power_signed_w = self.results.iloc[:, cooling_indices].sum(axis=1)
-            cooling_power_w = (-cooling_power_signed_w).clip(lower=0.0)
-        else:
-            cooling_power_w = self.results.iloc[:, 0] * 0.0
+            if outp.field_name == "ActualCoolingSupply" and outp.component_name.endswith("Building"):
+                cooling_power_w = (-self.results.iloc[:, idx].astype(float)).clip(lower=0.0)
+                break
+
+        if cooling_power_w is None:
+            cooling_indices: list[int] = []
+            for idx, outp in enumerate(self.all_outputs):
+                if not (
+                    building_objects_in_district == outp.component_name.split("_")[0]
+                    or not self.simulation_parameters.multiple_buildings
+                ):
+                    continue
+                if outp.unit != Units.WATT:
+                    continue
+                if outp.load_type != LoadTypes.COOLING:
+                    continue
+                cooling_indices.append(idx)
+            if len(cooling_indices) > 0:
+                cooling_power_signed_w = self.results.iloc[:, cooling_indices].sum(axis=1)
+                cooling_power_w = (-cooling_power_signed_w).clip(lower=0.0)
+            else:
+                cooling_power_w = self.results.iloc[:, 0] * 0.0
         self._add_peak_to_average_kpi(
             building_objects_in_district=building_objects_in_district,
             kpi_name="Peak-to-average load ratio - Cooling",
             power_timeseries_in_watt=cooling_power_w,
             kpi_tag=KpiTagEnumClass.BUILDING,
-            description="Yearly peak cooling power divided by yearly average cooling power (using cooling magnitude).",
+            description=(
+                "Yearly peak cooling power divided by yearly average cooling power "
+                "(zone-received ActualCoolingSupply magnitude when available)."
+            ),
         )
 
         # Electricity (use total consumption power series already built from postprocessing flags)

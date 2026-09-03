@@ -12,8 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Any
 
+from hisim import loadtypes as lt
 from hisim import utils
 
 
@@ -113,6 +114,18 @@ def get_cooling_plant_cap_from_hp_nominal(
     if not 0.0 < fraction <= 1.0:
         raise ValueError(f"nominal_fraction must be in (0, 1], got {fraction}.")
     return nominal_w * fraction
+
+
+def get_cooling_plant_cap_from_combined_heating_nominal(
+    hp_nominal_heating_power_in_watt: float,
+    supplemental_peak_heating_power_in_watt: float = 0.0,
+    nominal_fraction: float = DEFAULT_COOLING_PLANT_NOMINAL_FRACTION,
+) -> float:
+    """Max cooling plant power (W) from combined HP + supplemental peak heating nominal (e.g. HP05 oil peak)."""
+    combined_w = float(hp_nominal_heating_power_in_watt) + float(supplemental_peak_heating_power_in_watt)
+    if combined_w <= 0:
+        raise ValueError(f"combined heating nominal must be > 0, got {combined_w}.")
+    return get_cooling_plant_cap_from_hp_nominal(combined_w, nominal_fraction=nominal_fraction)
 
 
 # ComfortBandCoolingDemand tuning (Layer B): softer P-control so requests do not pin at cap.
@@ -354,4 +367,77 @@ def pick_heat_pump_closest_to_ideal(
         if p.manufacturer == manufacturer and p.name == name:
             return p
     raise RuntimeError("Chosen heat pump product not found after selection.")
+
+
+# KPI labels (aligned with Building timestep degree-hour outputs).
+KPI_OVERTEMPERATURE_DEGREE_HOURS_ABOVE_ADAPTIVE_UPPER = (
+    "Overtemperature degree-hours above adaptive comfort upper bound (occupied timesteps)"
+)
+KPI_UNDERTEMPERATURE_DEGREE_HOURS_BELOW_ADAPTIVE_LOWER = (
+    "Undertemperature degree-hours below adaptive comfort lower bound (occupied timesteps)"
+)
+
+
+@dataclass(frozen=True)
+class ChComfortBandSpaceCoolingWiring:
+    """Comfort-band space cooling demand + sign conversion for HDS (negative W = cooling)."""
+
+    comfort_cooling_demand: Any
+    signed_cooling_demand_negator: Any
+    minus_one_scalar: Any
+
+
+def create_ch_comfort_band_space_cooling_wiring(
+    my_simulation_parameters: Any,
+    cooling_cap_w: float,
+    building_name: str = "BUI1",
+) -> ChComfortBandSpaceCoolingWiring:
+    """Create comfort-band cooling demand and multiply by -1 for signed HDS demand convention."""
+    from hisim.components import comfort_band_cooling_demand, sumbuilder
+
+    cooling_p_gain = get_cooling_comfort_proportional_gain_w_per_k(float(cooling_cap_w))
+    comfort_cooling = comfort_band_cooling_demand.ComfortBandCoolingDemand(
+        my_simulation_parameters=my_simulation_parameters,
+        config=comfort_band_cooling_demand.ComfortBandCoolingDemandConfig.get_default_config(
+            building_name=building_name,
+            name="ComfortBandCoolingDemand",
+            max_cooling_power_in_watt=float(cooling_cap_w),
+            proportional_gain_in_watt_per_kelvin=cooling_p_gain,
+            relaxation_factor=DEFAULT_COOLING_COMFORT_RELAXATION_FACTOR,
+            theoretical_blend=DEFAULT_COOLING_THEORETICAL_BLEND,
+        ),
+    )
+    minus_one_scalar = sumbuilder.ConstantThermalPowerOutput(
+        my_simulation_parameters=my_simulation_parameters,
+        config=sumbuilder.ConstantThermalPowerConfig(
+            building_name=building_name,
+            name="ComfortCoolingDemandSign",
+            value_watt=-1.0,
+            loadtype=lt.LoadTypes.ANY,
+            unit=lt.Units.WATT,
+        ),
+    )
+    signed_negator = sumbuilder.CalculateOperation(
+        config=sumbuilder.SumBuilderConfig(
+            building_name=building_name,
+            name="SignedComfortCoolingDemand",
+            loadtype=lt.LoadTypes.ANY,
+            unit=lt.Units.WATT,
+        ),
+        my_simulation_parameters=my_simulation_parameters,
+    )
+    signed_negator.connect_arbitrary_input(
+        comfort_cooling.component_name,
+        comfort_cooling.CoolingDemand,
+    )
+    signed_negator.add_operation("Multiply")
+    signed_negator.connect_arbitrary_input(
+        minus_one_scalar.component_name,
+        minus_one_scalar.SumOutput,
+    )
+    return ChComfortBandSpaceCoolingWiring(
+        comfort_cooling_demand=comfort_cooling,
+        signed_cooling_demand_negator=signed_negator,
+        minus_one_scalar=minus_one_scalar,
+    )
 

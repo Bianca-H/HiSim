@@ -648,6 +648,7 @@ class GenericHeatPumpController(cp.Component):
     TemperatureComfortLowerBound = "TemperatureComfortLowerBound"
     TemperatureComfortUpperBound = "TemperatureComfortUpperBound"
     RunningAverageOutsideTemperature48h = "RunningAverageOutsideTemperature48h"
+    DailyAverageOutsideTemperature = "DailyAverageOutsideTemperature"
 
     # Outputs
     State = "State"
@@ -719,6 +720,13 @@ class GenericHeatPumpController(cp.Component):
             lt.Units.CELSIUS,
             False,
         )
+        self.daily_average_outside_temperature_channel: cp.ComponentInput = self.add_input(
+            self.component_name,
+            self.DailyAverageOutsideTemperature,
+            lt.LoadTypes.TEMPERATURE,
+            lt.Units.CELSIUS,
+            False,
+        )
         self.state_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
             self.State,
@@ -764,6 +772,7 @@ class GenericHeatPumpController(cp.Component):
 
         self.add_default_connections(self.get_default_connections_from_building())
         self.add_default_connections(self.get_default_connections_from_electricity_meter())
+        self.add_default_connections(self.get_default_connections_from_weather())
         self.controller_heatpumpmode: Any
         self.previous_heatpump_mode: Any
         self.applied_control_lower_temperature_in_celsius: float = self.heatpump_controller_config.temperature_air_heating_in_celsius
@@ -803,6 +812,20 @@ class GenericHeatPumpController(cp.Component):
                 GenericHeatPumpController.RunningAverageOutsideTemperature48h,
                 building_classname,
                 Building.RunningAverageOutsideTemperature48hOutputForController,
+            )
+        )
+        return connections
+
+    def get_default_connections_from_weather(self) -> List[cp.ComponentConnection]:
+        """Get weather default connections."""
+
+        connections = []
+        weather_classname = Weather.get_classname()
+        connections.append(
+            cp.ComponentConnection(
+                GenericHeatPumpController.DailyAverageOutsideTemperature,
+                weather_classname,
+                Weather.DailyAverageOutsideTemperatures,
             )
         )
         return connections
@@ -880,6 +903,12 @@ class GenericHeatPumpController(cp.Component):
                     self.running_average_outside_temperature_48h_channel
                 )
 
+            daily_average_outside_temperature = None
+            if self.daily_average_outside_temperature_channel.source_output is not None:
+                daily_average_outside_temperature = stsv.get_input_value(
+                    self.daily_average_outside_temperature_channel
+                )
+
             effective_temperature_set_heating = self.temperature_set_heating
             effective_temperature_set_cooling = self.temperature_set_cooling
             if (
@@ -899,6 +928,7 @@ class GenericHeatPumpController(cp.Component):
                     heating_set_temperature=effective_temperature_set_heating,
                     cooling_set_temperature=effective_temperature_set_cooling,
                     running_average_outside_temperature_48h=running_average_outside_temperature_48h,
+                    daily_average_outside_temperature_in_celsius=daily_average_outside_temperature,
                 )
             elif self.mode == 1:
                 self.conditions(
@@ -950,6 +980,7 @@ class GenericHeatPumpController(cp.Component):
         heating_set_temperature: float,
         cooling_set_temperature: float,
         running_average_outside_temperature_48h: Optional[float],
+        daily_average_outside_temperature_in_celsius: Optional[float] = None,
     ) -> None:
         """Use inward-offset comfort bands with seasonal gating.
 
@@ -959,7 +990,8 @@ class GenericHeatPumpController(cp.Component):
         - disabled entirely once running mean outdoor temperature > configured heating cutoff
 
         Cooling:
-        - only allowed once running mean outdoor temperature > configured cooling cutoff
+        - only allowed once daily mean outdoor temperature > configured cooling cutoff
+          (falls back to 48 h running mean if daily mean is not connected)
         - start when T > (comfort_upper - inner_offset)
         - stop when T <= (comfort_lower + inner_offset)
         """
@@ -992,12 +1024,19 @@ class GenericHeatPumpController(cp.Component):
                 running_average_outside_temperature_48h
                 <= self.config.heating_disabled_above_running_mean_outdoor_temperature_in_celsius
             )
+        else:
+            self.last_control_running_mean_outdoor_temperature_48h = None
+
+        if daily_average_outside_temperature_in_celsius is not None:
+            cooling_allowed = (
+                daily_average_outside_temperature_in_celsius
+                > self.config.cooling_enabled_above_running_mean_outdoor_temperature_in_celsius
+            )
+        elif running_average_outside_temperature_48h is not None:
             cooling_allowed = (
                 running_average_outside_temperature_48h
                 > self.config.cooling_enabled_above_running_mean_outdoor_temperature_in_celsius
             )
-        else:
-            self.last_control_running_mean_outdoor_temperature_48h = None
 
         self.last_control_heating_allowed = heating_allowed
         self.last_control_cooling_allowed = cooling_allowed

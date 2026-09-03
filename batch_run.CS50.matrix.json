@@ -1,16 +1,11 @@
 {
   "mode": "matrix",
-  "setup": ["hp04", "hp05", "bo01", "bo02","bo03", "bo04", "bg01", "bp01", "gr01", "gr02"],
+  "setup": ["hp01", "hp02", "hp03", "hp04", "hp05", "bo01", "bo02", "bo03", "bo04", "bg01", "bp01", "gr01", "gr02"],
   "arch": ["01_CH", "02_CH", "03_CH", "04_CH", "05_CH", "06_CH", "07_CH", "08_CH", "09_CH"],
   "weather": ["ZUESTA", "KLO", "BASSTA", "RUE"],
   "overrides": {
     "HEATGEN_SIZING": "IDEAL_LOOKUP",
-    "SCENARIO": "heatwave",
+    "SCENARIO": "coldSpell",
     "TIME_HORIZON": "future"
   }
 }
-
-
-
-
-

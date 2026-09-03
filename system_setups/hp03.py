@@ -332,6 +332,22 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     if last_exc is not None:
         raise last_exc
 
+    hp_nominal_for_cooling_w = float(
+        getattr(my_heatpump_config, "set_thermal_output_power_in_watt", 0.0) or 0.0
+    )
+    cooling_cap_w = heating_system_selection.get_cooling_plant_cap_from_hp_nominal(hp_nominal_for_cooling_w)
+    log.information(
+        f"HP comfort-band cooling cap {cooling_cap_w / 1e3:.2f} kW "
+        f"({heating_system_selection.DEFAULT_COOLING_PLANT_NOMINAL_FRACTION:.0%} of HP nominal "
+        f"{hp_nominal_for_cooling_w / 1e3:.2f} kW, aligned with split AC / district cooling setups)."
+    )
+    cli_overrides.set_used_value("COOLING_PLANT_CAP_W", str(int(round(cooling_cap_w))))
+    ch_cooling_wiring = heating_system_selection.create_ch_comfort_band_space_cooling_wiring(
+        my_simulation_parameters=my_simulation_parameters,
+        cooling_cap_w=float(cooling_cap_w),
+    )
+    my_comfort_cooling_demand = ch_cooling_wiring.comfort_cooling_demand
+
     # =============================================================================================================================
     # Electricity meter + strict comfort (heating recovery only)
     my_electricity_meter = electricity_meter.ElectricityMeter(
@@ -340,7 +356,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
 
     # KPI splits for postprocessing (aligned across HP/BO/BG/BP/GR setups):
-    # - `HeatGeneratorTotalThermalPower`: space heating and cooling (negative during cooling) via `ThermalOutputPowerSH`; no DHW.
+    # - `HeatGeneratorTotalThermalPower`: zone-received space heating/cooling via Building.ActualThermalBuildingSupply
+    #   (positive=heating to zone, negative=cooling to zone); no DHW.
     # - `HeatGeneratorPlantDhwThermalPower`: generator-side DHW (fossil / HP / district).
     # - `SolarDhwThermalPower`: solar thermal into DHW (0 W here — no solar primary on DHW).
     my_heatgen_total_thermal_power = sumbuilder.SumBuilderForOneInput(
@@ -386,11 +403,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
             comfort_band_inner_offset_lower_in_celsius=1.0,
             comfort_band_inner_offset_upper_in_celsius=0.5,
             heating_disabled_above_running_mean_outdoor_temperature_in_celsius=18.0,
-            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=22.0,
+            cooling_enabled_above_running_mean_outdoor_temperature_in_celsius=(
+                cli_overrides.DEFAULT_COOLING_ENABLED_ABOVE_DAILY_MEAN_OUTDOOR_TEMPERATURE_IN_CELSIUS
+            ),
         ),
         my_simulation_parameters=my_simulation_parameters,
     )
-    my_strict_comfort_controller.connect_only_predefined_connections(my_building)
+    my_strict_comfort_controller.connect_only_predefined_connections(my_building, my_weather)
     my_strict_comfort_controller.connect_input(
         my_strict_comfort_controller.ElectricityInput,
         my_electricity_meter.component_name,
@@ -452,8 +471,23 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_strict_comfort_controller.component_name,
         my_strict_comfort_controller.ControlHeatingAllowed,
     )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.OperativeTemperature,
+        my_building.component_name,
+        my_building.TemperatureOperative,
+    )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.UpperComfortSetpoint,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.AppliedControlUpperTemperature,
+    )
+    my_comfort_cooling_demand.connect_input(
+        my_comfort_cooling_demand.CoolingAllowed,
+        my_strict_comfort_controller.component_name,
+        my_strict_comfort_controller.ControlCoolingAllowed,
+    )
 
-    # Total demand signal for the HDS controller: proportional heating + (signed) building cooling demand.
+    # Total demand signal for the HDS controller: proportional heating + (signed) comfort-band cooling demand.
     my_total_thermal_building_demand = sumbuilder.SumBuilderForTwoInputs(
         my_simulation_parameters=my_simulation_parameters,
         config=sumbuilder.SumBuilderConfig(
@@ -510,8 +544,8 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     )
     my_total_thermal_building_demand.connect_input(
         my_total_thermal_building_demand.SumInput2,
-        my_building.component_name,
-        my_building.TheoreticalCoolingDemand,
+        ch_cooling_wiring.signed_cooling_demand_negator.component_name,
+        ch_cooling_wiring.signed_cooling_demand_negator.Output,
     )
 
     # HeatDistributionController: connect weather, then feed combined demand (heating + cooling)
@@ -524,6 +558,13 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_heat_distribution.connect_only_predefined_connections(
         my_building, my_heat_distribution_controller, my_hot_water_storage
     )
+    # Override Building ISO default: HDS power must use the same comfort-band demand as the controller
+    # (otherwise cooling mode opens on tiny comfort requests but delivers kW-scale ISO cooling).
+    my_heat_distribution.connect_input(
+        my_heat_distribution.TheoreticalThermalBuildingDemand,
+        my_total_thermal_building_demand.component_name,
+        my_total_thermal_building_demand.SumOutput,
+    )
 
     my_heatpump.connect_only_predefined_connections(
         my_heatpump_controller_space_heating,
@@ -533,12 +574,11 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
         my_dhw_storage,
     )
 
-    # Cooling is included in `ThermalOutputPowerSH` as negative power during cooling mode
-    # (see `MoreAdvancedHeatPumpHPLib` KPI split on SH > 0 vs SH < 0); do not add SH twice.
+    # Zone-received space heating (+) / cooling (-) for cross-setup comparable thermal KPIs.
     my_heatgen_total_thermal_power.connect_input(
         my_heatgen_total_thermal_power.SumInput1,
-        my_heatpump.component_name,
-        my_heatpump.ThermalOutputPowerSH,
+        my_building.component_name,
+        my_building.ActualThermalBuildingSupply,
     )
     my_heatgen_plant_dhw_thermal_power.connect_input(
         my_heatgen_plant_dhw_thermal_power.SumInput1,
@@ -675,6 +715,9 @@ def setup_function(my_sim: Any, my_simulation_parameters: Optional[SimulationPar
     my_sim.add_component(my_building)
     my_sim.add_component(my_strict_comfort_controller)
     my_sim.add_component(my_comfort_heating_demand)
+    my_sim.add_component(my_comfort_cooling_demand)
+    my_sim.add_component(ch_cooling_wiring.minus_one_scalar)
+    my_sim.add_component(ch_cooling_wiring.signed_cooling_demand_negator)
     my_sim.add_component(my_setpoint_modifier)
     my_sim.add_component(my_total_thermal_building_demand)
     my_sim.add_component(my_heat_distribution_controller)

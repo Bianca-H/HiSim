@@ -66,10 +66,13 @@ DEFAULT_HEATING_DISABLED_ABOVE_RUNNING_MEAN_OUTDOOR_TEMPERATURE_IN_CELSIUS = 18.
 # Comma-separated values are supported, e.g. SCENARIO=fossil_Crisis,heatwave,financial_Shock
 SCENARIO_FOSSIL_CRISIS = "fossil_Crisis"
 SCENARIO_HEATWAVE = "heatwave"
+SCENARIO_COLD_SPELL = "coldSpell"
 SCENARIO_FINANCIAL_SHOCK = "financial_Shock"
 _KNOWN_SCENARIOS = {
     SCENARIO_FOSSIL_CRISIS.lower(): SCENARIO_FOSSIL_CRISIS,
     SCENARIO_HEATWAVE.lower(): SCENARIO_HEATWAVE,
+    SCENARIO_COLD_SPELL.lower(): SCENARIO_COLD_SPELL,
+    "cs": SCENARIO_COLD_SPELL,
     SCENARIO_FINANCIAL_SHOCK.lower(): SCENARIO_FINANCIAL_SHOCK,
 }
 
@@ -81,8 +84,19 @@ FUTURE_ECONOMIC_YEAR = 2050
 
 CH_CUSTOM_CSV_WEATHER_LOCATIONS = frozenset({"ZUESTA", "BASSTA", "KLO", "RUE"})
 
+# 2012 historical cold-spell weather (generated from MeteoSwiss SMN data).
+CH_COLD_SPELL_WEATHER_FILES = {
+    "ZUESTA": "ZUESTA_2012_CS.csv",
+    "BASSTA": "BASSTA_2012_CS.csv",
+    "KLO": "KLO_2012_CS.csv",
+    "RUE": "RUE_2012_CS.csv",
+}
+
 # Swiss CH batch setups (hp/bo/bp/bg/gr): ISO/fallback heating setpoint (operative control uses adaptive band).
 DEFAULT_HEATING_SETPOINT_IN_CELSIUS = 20.5
+# Cooling season gate: allow space cooling when 48 h running-mean outdoor temperature exceeds this (°C).
+DEFAULT_COOLING_ENABLED_ABOVE_DAILY_MEAN_OUTDOOR_TEMPERATURE_IN_CELSIUS = 22.0
+DEFAULT_COOLING_ENABLED_ABOVE_RUNNING_MEAN_OUTDOOR_TEMPERATURE_IN_CELSIUS = 22.0
 # Shift adaptive comfort lower bound down for fossil crisis (control only; upper bound and KPI degree-hours stay unshifted).
 FOSSIL_CRISIS_COMFORT_LOWER_BOUND_SHIFT_IN_CELSIUS = -1.5 # based on Jaeger-Erben et. al (225): Policies for times of disruptions: How households in Europe dealt with the energy crisis in the winter 2022/2023
 FOSSIL_CRISIS_ELECTRICITY_PRICE_MULTIPLIER = 1.29 # Swiss difference between 2022 and 2023 electricity prices based on ElComElectricityPrices2021; applied for present and future fossil crisis runs
@@ -173,6 +187,20 @@ def validate_ch_batch_cli_configuration() -> None:
             "SCENARIO=financial_Shock requires TIME_HORIZON=future. "
             "The financial-shock renewable shortfall is defined relative to the 2050 pathway."
         )
+    if has_scenario(SCENARIO_COLD_SPELL) and get_time_horizon() != TIME_HORIZON_FUTURE:
+        raise ValueError(
+            "SCENARIO=coldSpell requires TIME_HORIZON=future (CS50). "
+            "Use 2012 historical cold-spell weather with future economic assumptions."
+        )
+    if has_scenario(SCENARIO_HEATWAVE) and has_scenario(SCENARIO_COLD_SPELL):
+        raise ValueError(
+            "SCENARIO=heatwave and SCENARIO=coldSpell cannot be combined; "
+            "they require different weather files."
+        )
+    if has_scenario(SCENARIO_COLD_SPELL):
+        log.information(
+            "Applied scenario SCENARIO=coldSpell: using 2012 historical cold-spell weather files."
+        )
     if has_scenario(SCENARIO_FINANCIAL_SHOCK):
         log.information(
             "Applied scenario SCENARIO=financial_Shock: "
@@ -187,6 +215,9 @@ def get_custom_csv_filename_for_location(weather_location: str) -> str:
     location = weather_location.strip().upper()
     if location not in CH_CUSTOM_CSV_WEATHER_LOCATIONS:
         raise ValueError(f"Weather location {weather_location!r} is not a Swiss custom CSV location.")
+
+    if has_scenario(SCENARIO_COLD_SPELL):
+        return CH_COLD_SPELL_WEATHER_FILES[location]
 
     use_heat_profile = has_scenario(SCENARIO_HEATWAVE)
     if get_time_horizon() == TIME_HORIZON_PRESENT:
@@ -219,6 +250,7 @@ SCENARIO_RESULT_DIRECTORY_TAGS = {
     SCENARIO_FOSSIL_CRISIS: "FC",
     SCENARIO_FINANCIAL_SHOCK: "ES",
     SCENARIO_HEATWAVE: "HW",
+    SCENARIO_COLD_SPELL: "CS",
 }
 
 
@@ -230,7 +262,12 @@ def get_result_directory_horizon_tag() -> str:
 def get_result_directory_scenario_tag() -> str:
     """Return concatenated scenario suffixes for result paths, e.g. 'FC_ES_HW_'."""
     tags: list[str] = []
-    for scenario_name in (SCENARIO_FOSSIL_CRISIS, SCENARIO_FINANCIAL_SHOCK, SCENARIO_HEATWAVE):
+    for scenario_name in (
+        SCENARIO_FOSSIL_CRISIS,
+        SCENARIO_FINANCIAL_SHOCK,
+        SCENARIO_HEATWAVE,
+        SCENARIO_COLD_SPELL,
+    ):
         if has_scenario(scenario_name):
             tag = SCENARIO_RESULT_DIRECTORY_TAGS.get(scenario_name)
             if tag:
@@ -380,7 +417,9 @@ def apply_weather_location_override(weather_module: Any, weather_value: Optional
         )
         log.information(
             f"Using custom CSV weather file {filename} for {loc.name} "
-            f"(TIME_HORIZON={get_time_horizon()})."
+            f"(TIME_HORIZON={get_time_horizon()}"
+            f"{', SCENARIO=coldSpell' if has_scenario(SCENARIO_COLD_SPELL) else ''}"
+            f"{', SCENARIO=heatwave' if has_scenario(SCENARIO_HEATWAVE) else ''})."
         )
     return config
 

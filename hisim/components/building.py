@@ -1098,7 +1098,7 @@ class Building(cp.Component):
             self.TemperatureOverTemperatureDegreeHours,
             lt.LoadTypes.ANY,
             lt.Units.HOURS,
-            output_description=f"Overtemperature degree-hours above comfort upper bound (per timestep).",
+            output_description=f"Overtemperature degree-hours above strict adaptive comfort upper target (per timestep).",
         )
         self.temperature_under_temperature_degree_hours_channel: cp.ComponentOutput = self.add_output(
             self.component_name,
@@ -1986,12 +1986,15 @@ class Building(cp.Component):
                 (indoor_air_temperature_in_celsius + internal_surface_temperature_in_celsius) / 2,
             )
 
-        # Degree-hours contribution per timestep.
-        # Standard comfort KPIs use unshifted adaptive bounds; relaxed undertemperature uses the control lower bound.
-        # Uses the timestep duration in hours (dt_h), so that summing over timesteps yields total degree-hours.
+        upper_inner_offset_in_celsius = max(
+            0.0,
+            float(self.buildingconfig.operative_comfort_inner_offset_upper_in_celsius),
+        )
+        comfort_upper_for_overtemperature_kpi_in_celsius = comfort_upper_bound - upper_inner_offset_in_celsius
+
+        # Degree-hours contribution per timestep (unshifted adaptive comfort bounds for standard KPIs).
+        # Relaxed undertemperature uses the control lower bound (may include scenario/control shift).
         dt_h = self.my_simulation_parameters.seconds_per_timestep / 3600.0
-        # Count degree-hours only when at least one person is present.
-        # We use occupant sensible heat gains as a robust proxy for presence across different occupancy models.
         people_present = 1.0 if internal_heat_gains_through_occupancy_in_watt > 0.0 else 0.0
         temperature_over_limit_degree_hours = (
             max(0.0, operative_temperature_in_celsius - comfort_upper_bound) * dt_h * people_present
@@ -2558,62 +2561,14 @@ class Building(cp.Component):
         in order to verify if energy system provides enough heating and cooling.
         """
 
-        temperature_difference_of_building_being_below_heating_set_temperature = 0
-        temperature_difference_of_building_being_below_cooling_set_temperature = 0
-        temperature_hours_of_building_being_below_heating_set_temperature = None
-        temperature_hours_of_building_being_above_cooling_set_temperature = None
-        min_temperature_reached_in_celsius = None
-        max_temperature_reached_in_celsius = None
         if output.field_name == self.TemperatureIndoorAir:
             indoor_temperatures_in_celsius = postprocessing_results.iloc[:, index]
-            for temperature in indoor_temperatures_in_celsius:
-                if temperature < self.set_heating_temperature_in_celsius:
-                    temperature_difference_heating = self.set_heating_temperature_in_celsius - temperature
 
-                    temperature_difference_of_building_being_below_heating_set_temperature = (
-                        temperature_difference_of_building_being_below_heating_set_temperature
-                        + temperature_difference_heating
-                    )
-                elif temperature > self.set_cooling_temperature_in_celsius:
-                    temperature_difference_cooling = temperature - self.set_cooling_temperature_in_celsius
-                    temperature_difference_of_building_being_below_cooling_set_temperature = (
-                        temperature_difference_of_building_being_below_cooling_set_temperature
-                        + temperature_difference_cooling
-                    )
-
-            temperature_hours_of_building_being_below_heating_set_temperature = (
-                temperature_difference_of_building_being_below_heating_set_temperature
-                * self.seconds_per_timestep
-                / 3600
-            )
-
-            temperature_hours_of_building_being_above_cooling_set_temperature = (
-                temperature_difference_of_building_being_below_cooling_set_temperature
-                * self.seconds_per_timestep
-                / 3600
-            )
-
-            # get also max and min indoor air temperature
+            # get max and min indoor air temperature
             min_temperature_reached_in_celsius = float(min(indoor_temperatures_in_celsius.values))
             max_temperature_reached_in_celsius = float(max(indoor_temperatures_in_celsius.values))
 
             # make kpi entries and append to list
-            temperature_hours_of_building_below_heating_set_temperature_entry = KpiEntry(
-                name=f"Temperature deviation of building indoor air temperature being below set temperature {self.set_heating_temperature_in_celsius} Celsius",
-                unit="°C*h",
-                value=temperature_hours_of_building_being_below_heating_set_temperature,
-                tag=KpiTagEnumClass.BUILDING,
-                description=self.component_name,
-            )
-            list_of_kpi_entries.append(temperature_hours_of_building_below_heating_set_temperature_entry)
-            temperature_hours_of_building_above_cooling_set_temperature_entry = KpiEntry(
-                name=f"Temperature deviation of building indoor air temperature being above set temperature {self.set_cooling_temperature_in_celsius} Celsius",
-                unit="°C*h",
-                value=temperature_hours_of_building_being_above_cooling_set_temperature,
-                tag=KpiTagEnumClass.BUILDING,
-                description=self.component_name,
-            )
-            list_of_kpi_entries.append(temperature_hours_of_building_above_cooling_set_temperature_entry)
             min_temperature_reached_in_celsius_entry = KpiEntry(
                 name="Minimum building indoor air temperature reached",
                 unit="°C",
@@ -2668,6 +2623,39 @@ class Building(cp.Component):
             )
             list_of_kpi_entries.append(cooling_demand_entry)
 
+        elif output.field_name == self.ActualHeatingSupply:
+            heating_supply_in_kilowatt_hour = KpiHelperClass.compute_total_energy_from_power_timeseries(
+                postprocessing_results.iloc[:, index].astype(float).clip(lower=0.0),
+                timeresolution=self.seconds_per_timestep,
+            )
+            list_of_kpi_entries.append(
+                KpiEntry(
+                    name="Actual heating energy supplied to the building",
+                    unit="kWh",
+                    value=heating_supply_in_kilowatt_hour,
+                    tag=KpiTagEnumClass.BUILDING,
+                    description=self.component_name,
+                )
+            )
+
+        elif output.field_name == self.ActualCoolingSupply:
+            cooling_supply_power = postprocessing_results.iloc[:, index].astype(float)
+            cooling_supply_in_kilowatt_hour = abs(
+                KpiHelperClass.compute_total_energy_from_power_timeseries(
+                    cooling_supply_power[cooling_supply_power < 0.0],
+                    timeresolution=self.seconds_per_timestep,
+                )
+            )
+            list_of_kpi_entries.append(
+                KpiEntry(
+                    name="Actual cooling energy supplied to the building",
+                    unit="kWh",
+                    value=cooling_supply_in_kilowatt_hour,
+                    tag=KpiTagEnumClass.BUILDING,
+                    description=self.component_name,
+                )
+            )
+
         elif output.field_name == self.SolarGainThroughWindows:
             solar_gains_values_in_watt = postprocessing_results.iloc[:, index]
             # get energy from power
@@ -2697,6 +2685,30 @@ class Building(cp.Component):
                 description=self.component_name,
             )
             list_of_kpi_entries.append(energy_gains_from_internal_entry)
+
+        elif output.field_name == self.TemperatureOverTemperatureDegreeHours:
+            overtemperature_degree_hours = float(sum(postprocessing_results.iloc[:, index]))
+            list_of_kpi_entries.append(
+                KpiEntry(
+                    name="Overtemperature degree-hours above strict adaptive comfort upper target (occupied timesteps)",
+                    unit="°C*h",
+                    value=overtemperature_degree_hours,
+                    tag=KpiTagEnumClass.BUILDING,
+                    description=self.component_name,
+                )
+            )
+
+        elif output.field_name == self.TemperatureUnderTemperatureDegreeHours:
+            undertemperature_degree_hours = float(sum(postprocessing_results.iloc[:, index]))
+            list_of_kpi_entries.append(
+                KpiEntry(
+                    name="Undertemperature degree-hours below adaptive comfort lower bound (occupied timesteps)",
+                    unit="°C*h",
+                    value=undertemperature_degree_hours,
+                    tag=KpiTagEnumClass.BUILDING,
+                    description=self.component_name,
+                )
+            )
 
         return list_of_kpi_entries
 
